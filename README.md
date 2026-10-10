@@ -2,8 +2,6 @@
 
 Extension browser modern untuk Microsoft Edge & Google Chrome yang mengotomatisasi penambahan **Collaborators**, **Experiences**, **Scan & Archiving Audio Moderated** pada aset Audio di **Roblox Creator Dashboard** (`create.roblox.com`).
 
-Dilengkapi dengan **Popup Dashboard UI**, **Floating Controller (HUD) di Halaman Roblox**, **Fitur Pause & Resume**, **Auto Archive via API**, serta **Penanganan 404 Automatic Reload**.
-
 ---
 
 > [!WARNING]
@@ -14,8 +12,6 @@ Dilengkapi dengan **Popup Dashboard UI**, **Floating Controller (HUD) di Halaman
 
 ## 🌟 Fitur Utama
 
-- **Popup UI Dashboard (Glassmorphism Dark Theme)**: Antarmuka modern untuk mengonfigurasi list Usernames, Universe ID, serta kontrol Start, Pause/Resume, Stop, Reset, dan Progress Bar.
-- **Floating HUD Controller (di Halaman Roblox)**: Widget melayang langsung di halaman Roblox Creator Dashboard untuk memantau status secara live, melihat log aktif, serta tombol pause/stop darurat.
 - **Fitur Jeda & Lanjutkan (Pause & Resume)**: Menghentikan sementara proses kapan saja di tengah jalan tanpa kehilangan progres, dan dapat dilanjutkan kembali dengan 1 klik.
 - **Auto Archive via Roblox API + DOM Fallback**: Mengarsip audio yang ter-moderasi langsung menggunakan Roblox API (`develop.roblox.com/v1/assets/{id}/archive`), bypass semua kendala UI/hover/Radix portal. Jika API dibatasi, ekstensi otomatis beralih ke simulasi hover & click DOM.
 - **Tingkatan Moderasi (FATAL vs LOW)**:
@@ -59,7 +55,7 @@ auto-permission-audio-roblox-extensions/
 1. Buka **Microsoft Edge** (`edge://extensions`) atau **Google Chrome** (`chrome://extensions`).
 2. Aktifkan mode pengembang (**Developer mode**) di toggle samping/atas menu.
 3. Klik tombol **Load unpacked** (Muat tanpa kemasan).
-4. Pilih folder repositori ekstensi ini (`auto-permission-audio-roblox-extensions`).
+4. Pilih folder repositori ekstensi ini (`roblox-auto-permission-audio-extensions`).
 5. Extension **Roblox Auto Permission - Pro Tool** akan terpasang dan muncul di toolbar browser.
 
 ---
@@ -67,11 +63,11 @@ auto-permission-audio-roblox-extensions/
 ## 🚀 Cara Penggunaan
 
 1. Klik ikon extension di toolbar browser untuk membuka **Popup UI**.
-2. Masukkan **Usernames** (contoh: `TBR SOCIETY`) dan **Universe ID** (contoh: `12345678`).
+2. Masukkan **Usernames** (contoh: `GussJTM`) dan **Universe ID** (contoh: `12345678`).
 3. Pilih mode yang ingin dijalankan:
    - Klik **🚀 Start Both** untuk memproses Collaborators + Experiences.
    - Atau pilih **👤 Start Username**, **🎮 Start Universe**, **🔍 Scan Only**, atau **📦 Archive Moderated**.
-4. Extension akan membuka halaman `https://create.roblox.com/dashboard/creations?activeTab=Audio` secara otomatis.
+4. Extension akan membuka halaman `https://create.roblox.com/dashboard/creations?activeTab=Audio` secara otomatis, Pastikan anda sudah login terlebih dahulu.
 5. **Floating HUD** akan muncul di pojok kanan atas halaman Roblox untuk menampilkan aktivitas live.
 6. Untuk menjeda/melanjutkan, klik tombol **Pause / Resume** di Popup atau Floating HUD.
 7. Setelah selesai, klik tombol **View JSON** di Popup untuk melihat / menyalin daftar lagu hasil scan.

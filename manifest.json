@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "Roblox Auto Permission - Pro Tool",
   "version": "10.1.0",
-  "description": "Otomatisasi izin Audio Collaborators & Experiences di Roblox Creator Dashboard dengan UI Modern & Floating Controller.",
+  "description": "Otomatisasi izin Audio Collaborators & Experiences di Roblox Creator Dashboard!",
+  "homepage_url": "https://github.com/oyy-gus/roblox-auto-permission-audio-extensions",
   "permissions": [
     "storage",
     "activeTab"
