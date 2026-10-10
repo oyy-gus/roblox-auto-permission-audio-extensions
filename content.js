@@ -1,4 +1,4 @@
-// Roblox Auto Permission - Content Script v10.3 (Enhanced Auto Next & Pagination Detection)
+// Roblox Auto Permission - Content Script v10.4 (Instant Skip & Robust Dialog Close)
 
 (function () {
   'use strict';
@@ -79,7 +79,9 @@
   }
 
   function alreadyExists(username) {
-    return document.body.innerText.toLowerCase().includes(username.toLowerCase());
+    if (!username) return false;
+    const bodyText = document.body ? document.body.innerText.toLowerCase() : '';
+    return bodyText.includes(username.toLowerCase());
   }
 
   // Moderation Check Helper
@@ -182,9 +184,7 @@
     return { cleanData, moderatedData };
   }
 
-  // Next Page Button Selector (Supports all pagination UI formats)
   function getNextPageButton() {
-    // Check specific ARIA labels & classes
     const candidates = [
       'button[aria-label="Go to next page"]:not([disabled])',
       'button[aria-label="Next page"]:not([disabled])',
@@ -199,7 +199,6 @@
       if (btn && !btn.disabled) return btn;
     }
 
-    // Fallback: search buttons at bottom of page with right arrow chevron SVG or text
     const allButtons = Array.from(document.querySelectorAll('nav button, table ~ div button, footer button'));
     for (const btn of allButtons) {
       const text = btn.textContent?.trim() || '';
@@ -212,7 +211,6 @@
     return null;
   }
 
-  // Scan All Pages Function
   async function scanAllPages(mode) {
     log("Mulai scan otomatis semua halaman Audio...");
     await waitForElement('table, [role="table"]', 15000);
@@ -279,15 +277,15 @@
     }
   }
 
-  // Helper to Navigate to Next Track Reliably
+  // Navigate to Next Track Helper
   async function goToNextTrack(currentIndex, ids) {
     const nextIndex = currentIndex + 1;
     await chrome.storage.local.set({ rbx_index: nextIndex });
-    await wait(1200);
+    await wait(800);
 
     if (nextIndex < ids.length) {
       const nextId = ids[nextIndex];
-      log(`[${nextIndex + 1}/${ids.length}] Otomatis pindah ke lagu selanjutnya (ID: ${nextId})...`);
+      log(`[${nextIndex + 1}/${ids.length}] Otomatis berpindah ke lagu selanjutnya (ID: ${nextId})...`);
       window.location.href = `https://create.roblox.com/dashboard/creations/store/${nextId}/permissions`;
     } else {
       await chrome.storage.local.set({ rbx_auto_active: false });
@@ -298,52 +296,46 @@
     }
   }
 
-  // Auto Archive Action
-  async function archiveRowBySoundId(soundId) {
-    const rows = document.querySelectorAll('table tbody tr, [role="row"]');
-    for (const row of rows) {
-      if (row.textContent.includes(soundId)) {
-        const moreBtn = row.querySelector('button[aria-label*="More"], button[aria-label*="options"], button:last-child');
-        if (moreBtn) {
-          moreBtn.click();
-          await wait(600);
-
-          const menuItems = document.querySelectorAll('[role="menu"] [role="menuitem"], [role="menuitem"], li, button');
-          for (const item of menuItems) {
-            if (item.textContent.trim() === 'Archive') {
-              item.click();
-              await wait(1000);
-
-              const confirmBtn = document.querySelector('[role="dialog"] button:not([aria-label="Close"])');
-              if (confirmBtn && confirmBtn.textContent.includes('Archive')) {
-                confirmBtn.click();
-                await wait(1000);
-              }
-              return true;
-            }
-          }
-        }
+  // Close Modal Dialog Helper
+  function closeModalDialog(label = 'Done') {
+    const buttons = document.querySelectorAll(
+      '[role="dialog"] button, [data-testid*="modal"] button, .MuiDialogActions-root button, button'
+    );
+    for (const btn of buttons) {
+      const text = btn.textContent?.trim() || '';
+      if (text === label || text === 'Done' || text === 'Close') {
+        try { btn.click(); return true; } catch(e){}
       }
     }
     return false;
   }
 
-  async function processArchiveModerated(moderatedList) {
-    log(`Mulai Mengarsip ${moderatedList.length} Audio Moderasi...`);
-    for (let i = 0; i < moderatedList.length; i++) {
-      const track = moderatedList[i];
-      log(`[${i + 1}/${moderatedList.length}] Mengarsip: ${track.title} (ID: ${track.sound_id})`);
-      const success = await archiveRowBySoundId(track.sound_id);
-      if (success) {
-        log(`✔ Berhasil Diarsip: ${track.sound_id}`);
-      } else {
-        log(`⚠️ Gagal klik tombol Archive untuk ID: ${track.sound_id}`);
-      }
-      await wait(1500);
+  async function waitDialogClose() {
+    for (let i = 0; i < 8; i++) {
+      await wait(300);
+      const openDialog = document.querySelector('[data-testid="add-collaborators-modal"], [data-testid="add-experiences-modal"], [role="dialog"]');
+      if (!openDialog) return true;
     }
-    await chrome.storage.local.set({ rbx_auto_active: false });
-    log("Proses Arsip Audio Moderasi Selesai ✔");
-    alert(`PROSES ARSIP SELESAI ✔\nTotal ${moderatedList.length} audio telah diarsip.`);
+    closeModalDialog('Done');
+    await wait(400);
+    return true;
+  }
+
+  async function clickSaveChanges() {
+    await wait(400);
+    for (const btn of document.querySelectorAll('button')) {
+      const text = btn.textContent?.trim() || '';
+      if (text.includes('Save Changes')) {
+        if (btn.disabled) {
+          log('Save Changes tidak aktif (sudah tersimpan) ✔');
+          return true;
+        }
+        btn.click();
+        log('Save Changes diklik ✔');
+        return true;
+      }
+    }
+    return true;
   }
 
   // Collaborators Tab Logic
@@ -351,7 +343,7 @@
     return await retry(async () => {
       const tab = document.querySelector('button#Collaborators[role="tab"]') ||
                   Array.from(document.querySelectorAll('button[role="tab"]')).find(b => b.textContent.includes('Collaborators'));
-      if (tab) { tab.click(); await wait(1500); return true; }
+      if (tab) { tab.click(); await wait(1200); return true; }
       return false;
     });
   }
@@ -362,7 +354,7 @@
         const text = btn.textContent?.trim() || '';
         if (text.includes('Add collaborators') || text.includes('+ Add collaborators')) {
           btn.click();
-          await wait(1500);
+          await wait(1200);
           return true;
         }
       }
@@ -376,10 +368,10 @@
                      document.querySelector('[role="dialog"]') ||
                      Array.from(document.querySelectorAll('div')).find(d => d.textContent?.includes('Add Collaborators') && d.querySelector('input'));
       return dialog || false;
-    }, 10, 500);
+    }, 10, 400);
   }
 
-  async function waitDropdown(timeout = 8000) {
+  async function waitDropdown(timeout = 6000) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
       const opts = document.querySelectorAll(
@@ -397,74 +389,48 @@
     );
     for (const opt of opts) {
       if (opt.textContent?.toLowerCase().includes(username.toLowerCase())) {
-        opt.click(); await wait(700); return true;
+        opt.click(); await wait(600); return true;
       }
     }
     return false;
-  }
-
-  function clickDialogButton(dialog, label) {
-    const buttons = dialog.querySelectorAll('button');
-    for (const btn of buttons) {
-      const text = btn.textContent?.trim() || '';
-      if (text === label || text.includes(label)) {
-        btn.click();
-        return true;
-      }
-    }
-    return false;
-  }
-
-  async function waitDialogClose() {
-    for (let i = 0; i < 20; i++) {
-      await wait(500);
-      const openDialog = document.querySelector('[data-testid="add-collaborators-modal"], [data-testid="add-experiences-modal"]');
-      if (!openDialog) return true;
-    }
-    return false;
-  }
-
-  async function clickSaveChanges() {
-    await wait(500);
-    for (const btn of document.querySelectorAll('button')) {
-      const text = btn.textContent?.trim() || '';
-      if (text.includes('Save Changes')) {
-        if (btn.disabled) {
-          log('Save Changes tidak aktif (sudah tersimpan / tidak ada perubahan) ✔');
-          return true;
-        }
-        btn.click();
-        log('Save Changes diklik ✔');
-        return true;
-      }
-    }
-    return true; // Proceed anyway
   }
 
   async function processCollaborators(usernames) {
     log("── [COLLABORATORS] ──");
     await waitForElement('button#Collaborators[role="tab"], button[role="tab"]', 15000);
-    await wait(1000);
+    await wait(800);
 
     await switchToCollaboratorsTab();
-    await wait(1500);
+    await wait(800);
+
+    // 1. FAST-CHECK: Check if ALL target usernames ALREADY exist on page before opening modal!
+    const missingUsernames = usernames.filter(u => !alreadyExists(u));
+
+    if (missingUsernames.length === 0) {
+      log(`⚡ INSTANT SKIP: Semua username (${usernames.join(', ')}) SUDAH ADA pada lagu ini ✔`);
+      return true;
+    }
+
+    log(`Proses penambahan ${missingUsernames.length} user: ${missingUsernames.join(', ')}`);
 
     const opened = await openCollaboratorsDialog();
-    if (!opened) { log("Gagal membuka dialog Collaborators"); return; }
+    if (!opened) { log("Gagal membuka dialog Collaborators"); return false; }
 
     const dialog = await waitCollaboratorsDialog();
-    if (!dialog) { log("Dialog Collaborators tidak muncul"); return; }
-    log("Dialog Collaborators terbuka ✔");
+    const dialogRoot = dialog || document;
 
     let addedCount = 0;
-    for (const username of usernames) {
+    for (const username of missingUsernames) {
       log(`Proses user: ${username}`);
       if (alreadyExists(username)) {
         log(`Skip ${username} - sudah ada`);
         continue;
       }
 
-      const input = dialog.querySelector('input[placeholder*="Search"] input, input[placeholder*="friend"], input[placeholder*="Search"], [data-testid="autocomplete"] input, input[type="text"], input');
+      const input = dialogRoot.querySelector(
+        'input[placeholder*="Search"] input, input[placeholder*="friend"], input[placeholder*="Search"], [data-testid="autocomplete"] input, input[type="text"], input'
+      ) || document.querySelector('[role="dialog"] input, [data-testid="add-collaborators-modal"] input');
+
       if (!input) { log("Input username tidak ditemukan"); continue; }
 
       setNativeValue(input, '');
@@ -472,7 +438,7 @@
       await typeUsername(input, username);
       await wait(500);
 
-      const opts = await waitDropdown(8000);
+      const opts = await waitDropdown(6000);
       if (!opts || opts.length === 0) {
         log(`Dropdown tidak muncul untuk ${username}`);
         setNativeValue(input, '');
@@ -488,15 +454,16 @@
 
       log(`${username} berhasil dipilih ✔`);
       addedCount++;
-      await wait(800);
+      await wait(600);
     }
 
-    clickDialogButton(dialog, 'Done');
+    closeModalDialog('Done');
     await waitDialogClose();
-    await wait(1000);
+    await wait(600);
     await clickSaveChanges();
-    await wait(1500);
+    await wait(1000);
     log(`Collaborators selesai (${addedCount} ditambahkan) ✔`);
+    return true;
   }
 
   // Experiences Tab Logic
@@ -504,7 +471,7 @@
     return await retry(async () => {
       const tab = document.querySelector('button#Experiences[role="tab"]') ||
                   Array.from(document.querySelectorAll('button[role="tab"]')).find(b => b.textContent.includes('Experiences'));
-      if (tab) { tab.click(); await wait(1500); return true; }
+      if (tab) { tab.click(); await wait(1200); return true; }
       return false;
     });
   }
@@ -514,7 +481,7 @@
       for (const btn of document.querySelectorAll('button')) {
         const text = btn.textContent?.trim() || '';
         if (text.includes('Add experiences')) {
-          btn.click(); await wait(2000); return true;
+          btn.click(); await wait(1500); return true;
         }
       }
       return false;
@@ -528,7 +495,7 @@
     }
     log("── [EXPERIENCES] ──");
     await switchToExperiencesTab();
-    await wait(1500);
+    await wait(800);
 
     const opened = await openExperiencesDialog();
     if (!opened) { log("Gagal membuka dialog Experiences"); return; }
@@ -543,12 +510,12 @@
     input.focus();
     setNativeValue(input, universeId);
     log(`Universe ID dimasukkan: ${universeId}`);
-    await wait(1000);
+    await wait(800);
 
     log("Menunggu tombol Add...");
     let addBtn = null;
     const addStart = Date.now();
-    while (Date.now() - addStart < 8000) {
+    while (Date.now() - addStart < 6000) {
       for (const btn of dialog.querySelectorAll('button')) {
         const text = btn.textContent?.trim() || '';
         if (text === 'Add' && !btn.disabled) { addBtn = btn; break; }
@@ -563,12 +530,12 @@
     } else {
       log("Tombol Add tidak aktif / tidak ditemukan");
     }
-    await wait(1500);
-
-    clickDialogButton(dialog, 'Done');
-    await wait(1500);
-    await waitDialogClose();
     await wait(1000);
+
+    closeModalDialog('Done');
+    await wait(1000);
+    await waitDialogClose();
+    await wait(800);
     log("Experiences selesai ✔");
   }
 
@@ -582,7 +549,7 @@
       await processExperiences(universeId);
     } else {
       await processCollaborators(usernames);
-      await wait(1000);
+      await wait(800);
       await processExperiences(universeId);
     }
   }
@@ -608,7 +575,6 @@
           return;
         }
 
-        // If IDs empty, trigger full page scan first
         if (ids.length === 0) {
           if (window.location.href.includes('/creations')) {
             await scanAllPages(mode);
@@ -638,16 +604,14 @@
         const currentId = storeMatch ? storeMatch[1] : null;
         const pageType = storeMatch ? storeMatch[2] : null;
 
-        // If not on the store page for current ID, navigate to permissions page
         if (currentId !== id) {
           log(`[${index + 1}/${ids.length}] Navigasi ke ID: ${id}`);
           window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
           return;
         }
 
-        // Handle case where Roblox opens /configure page instead of /permissions
         if (pageType === 'configure') {
-          await wait(1000);
+          await wait(800);
           if (isAudioModerated()) {
             log(`⚠️ SKIP: Lagu (ID: ${id}) TERKENA MODERASI!`);
             const moderatedList = data.rbx_moderated_data || [];
@@ -659,7 +623,6 @@
             return;
           }
 
-          // Redirect to /permissions
           log(`Pindah dari Configure ke Permissions tab (ID: ${id})...`);
           window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
           return;
@@ -673,8 +636,7 @@
 
         updateHUDInfo(songName, id, index + 1, ids.length, mode);
 
-        // Check if page indicates Audio Moderated
-        await wait(1000);
+        await wait(800);
         if (isAudioModerated()) {
           log(`⚠️ SKIP: Lagu "${songName}" (ID: ${id}) TERKENA MODERASI!`);
           const moderatedList = data.rbx_moderated_data || [];
@@ -686,10 +648,7 @@
           return;
         }
 
-        // Process asset (Collaborators / Experiences)
         await processOneAsset(mode, data);
-
-        // ALWAYS move to next track after processing completes
         await goToNextTrack(index, ids);
       }
     );
@@ -722,7 +681,7 @@
         <div class="hud-song-info" id="hudSongInfo">
           Status: <strong>Idle</strong>
         </div>
-        <div class="hud-logs-box" id="hudLogs">[AutoPerm] Deteksi otomatis halaman & navigasi aktif.</div>
+        <div class="hud-logs-box" id="hudLogs">[AutoPerm] Instant Skip & Fast Navigation Active.</div>
         <div class="hud-actions">
           <button id="hudStopBtn" class="hud-action-btn hud-btn-stop">Stop</button>
           <button id="hudResetBtn" class="hud-action-btn hud-btn-reset">Reset</button>
