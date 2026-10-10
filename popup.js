@@ -1,4 +1,4 @@
-// Roblox Auto Permission - Popup Logic v10.2
+// Roblox Auto Permission - Popup Logic v10.6
 
 document.addEventListener('DOMContentLoaded', async () => {
   const inputUsernames = document.getElementById('inputUsernames');
@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (active) {
       statusBadge.classList.add('active');
-      statusText.textContent = mode === 'scan' ? 'SCANNING' :
+      statusText.textContent = mode === 'scan' ? 'SCANNING ALL PAGES' :
                                mode === 'archive_moderated' ? 'ARCHIVING MODERATED' :
                                `RUNNING (${mode.toUpperCase()})`;
     } else {
@@ -84,7 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       progressPercent.textContent = `${pct}%`;
       progressBarFill.style.width = `${pct}%`;
     } else if (mode === 'scan') {
-      progressLabel.textContent = `Scanning Audio List...`;
+      progressLabel.textContent = `Memindai Seluruh Halaman Audio...`;
       progressPercent.textContent = ``;
       progressBarFill.style.width = `100%`;
     } else {
@@ -127,12 +127,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
+    // Force full re-scan of all pages on fresh start
     await chrome.storage.local.set({
       rbx_auto_active: true,
+      rbx_needs_rescan: true,
       rbx_mode: mode,
       rbx_index: 0,
       rbx_ids: [],
-      rbx_logs: [`[AutoPerm] Memulai mode ${mode.toUpperCase()}...`]
+      rbx_audio_data: [],
+      rbx_moderated_data: [],
+      rbx_logs: [`[AutoPerm] Memulai pemindaian ulang seluruh halaman untuk mode ${mode.toUpperCase()}...`]
     });
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -157,7 +161,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   btnStop.addEventListener('click', async () => {
     await chrome.storage.local.set({
-      rbx_auto_active: false
+      rbx_auto_active: false,
+      rbx_needs_rescan: false
     });
     chrome.storage.local.get(['rbx_logs'], (data) => {
       const logs = data.rbx_logs || [];
@@ -169,6 +174,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnReset.addEventListener('click', async () => {
     await chrome.storage.local.set({
       rbx_auto_active: false,
+      rbx_needs_rescan: false,
       rbx_mode: null,
       rbx_index: 0,
       rbx_ids: [],
@@ -178,7 +184,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // Modal Handlers
   function renderJsonModal() {
     chrome.storage.local.get(['rbx_audio_data', 'rbx_moderated_data'], (data) => {
       const cleanData = data.rbx_audio_data || [];

@@ -1,4 +1,4 @@
-// Roblox Auto Permission - Content Script v10.5 (Full Multi-Page Scan & Reliable Auto Archive)
+// Roblox Auto Permission - Content Script v10.6 (Full Multi-Page Scan & Rescan Guarantee)
 
 (function () {
   'use strict';
@@ -110,10 +110,8 @@
     for (const svg of svgs) {
       const html = svg.outerHTML.toLowerCase();
       if (html.includes('ban') || html.includes('prohibited') || html.includes('lock') ||
-          html.includes('circle-slash') || html.includes('d="m12 2a10 10') ||
-          svg.getAttribute('data-testid')?.includes('Chevron') === false && html.includes('path')) {
-        // If row SVG contains prohibition symbol or ban icon shape
-        if (html.includes('ban') || html.includes('prohibit') || html.includes('slash')) return true;
+          html.includes('circle-slash') || html.includes('d="m12 2a10 10')) {
+        return true;
       }
     }
 
@@ -186,56 +184,59 @@
     return { cleanData, moderatedData };
   }
 
-  // Next Page Button Finder (Comprehensive MUI & ARIA Paginator Selector)
+  // Next Page Button Finder (Matches Roblox's button[aria-label="Next page"])
   function getNextPageButton() {
-    // 1. Direct attribute & class selectors
     const candidates = [
-      'button[aria-label="Go to next page"]:not([disabled])',
-      'button[aria-label="Next page"]:not([disabled])',
-      'button[aria-label*="next" i]:not([disabled])',
-      '.MuiPaginationItem-next:not([disabled])',
-      'button.MuiPaginationItem-root:last-child:not([disabled])',
-      'ul.MuiPagination-ul li:last-child button:not([disabled])',
-      'nav[aria-label*="pagination" i] button:last-child:not([disabled])'
+      'button[aria-label="Next page"]',
+      'button[aria-label="Go to next page"]',
+      'button[aria-label*="next" i]',
+      '.MuiPaginationItem-next'
     ];
 
     for (const sel of candidates) {
       const btn = document.querySelector(sel);
-      if (btn && !btn.disabled) return btn;
+      if (btn) {
+        const isDisabled = btn.hasAttribute('disabled') ||
+                           btn.disabled === true ||
+                           btn.classList.contains('opacity-[0.5]') ||
+                           btn.getAttribute('aria-disabled') === 'true';
+        if (!isDisabled) return btn;
+      }
     }
 
-    // 2. Search all buttons inside pagination nav or bottom container for SVG icons
-    const paginators = document.querySelectorAll('nav, ul.MuiPagination-ul, table ~ div');
-    for (const pag of paginators) {
-      const btns = Array.from(pag.querySelectorAll('button:not([disabled])'));
-      for (const btn of btns) {
-        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-        const svg = btn.querySelector('svg');
-        const svgTestId = svg ? (svg.getAttribute('data-testid') || '').toLowerCase() : '';
-
-        if (aria.includes('next') || svgTestId.includes('chevronright') || svgTestId.includes('navigatenext')) {
-          return btn;
-        }
-      }
-
-      // If last button in pagination is active and not disabled
-      if (btns.length > 0) {
-        const lastBtn = btns[btns.length - 1];
-        const aria = (lastBtn.getAttribute('aria-label') || '').toLowerCase();
-        if (aria.includes('next') || aria.includes('go to next')) {
-          return lastBtn;
-        }
+    const allButtons = Array.from(document.querySelectorAll('button'));
+    for (const btn of allButtons) {
+      const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+      const isDisabled = btn.hasAttribute('disabled') || btn.classList.contains('opacity-[0.5]');
+      if (aria.includes('next page') && !isDisabled) {
+        return btn;
       }
     }
 
     return null;
   }
 
+  // Check and click First Page button if not on Page 1
+  async function resetToFirstPage() {
+    const firstBtn = document.querySelector('button[aria-label="First page"]:not([disabled])') ||
+                     document.querySelector('button[aria-label*="first" i]:not([disabled])');
+
+    if (firstBtn && !firstBtn.hasAttribute('disabled') && !firstBtn.classList.contains('opacity-[0.5]')) {
+      log("Kembali ke Halaman Pertama (First Page)...");
+      firstBtn.click();
+      await wait(2500);
+      await waitForElement('table tbody tr', 10000);
+    }
+  }
+
   // Scan All Pages Function (Scans ALL pages on creations table)
   async function scanAllPages(mode) {
-    log("=== MEMULAI SCAN SEMUA HALAMAN AUDIO ===");
+    log("=== MEMULAI PEMINDAIAN SELURUH HALAMAN AUDIO ===");
     await waitForElement('table, [role="table"]', 15000);
     await wait(1200);
+
+    // Reset to page 1 first if on another page
+    await resetToFirstPage();
 
     let allClean = [];
     let allModerated = [];
@@ -245,7 +246,6 @@
       const { cleanData, moderatedData } = scanAudioData();
       log(`Halaman ${page}: Ditemukan ${cleanData.length} audio lulus, ${moderatedData.length} audio ter-moderasi`);
 
-      // Merge unique
       cleanData.forEach(item => {
         if (!allClean.some(x => x.sound_id === item.sound_id)) allClean.push(item);
       });
@@ -259,16 +259,16 @@
         break;
       }
 
-      log(`Pindah dari Halaman ${page} ke Halaman ${page + 1}...`);
+      log(`Pindah ke Halaman ${page + 1}...`);
       nextBtn.click();
       page++;
-      await wait(3000); // Wait for next page table rows to render
+      await wait(3000); // Wait for next page table rows to load
       await waitForElement('table, [role="table"]', 10000);
       await wait(1000);
     }
 
     log(`================================================`);
-    log(`SCAN SELESAI: Total ${allClean.length} Audio Lulus | ${allModerated.length} Ter-Moderasi`);
+    log(`SCAN SELESAI: Total ${allClean.length} Audio Lulus | ${allModerated.length} Ter-Moderasi (${page} Halaman)`);
     log(`================================================`);
 
     const targetIds = (mode === 'archive_moderated') ?
@@ -280,7 +280,8 @@
       rbx_audio_data: allClean,
       rbx_moderated_data: allModerated,
       rbx_index: 0,
-      rbx_mode: mode
+      rbx_mode: mode,
+      rbx_needs_rescan: false
     });
 
     if (mode === 'scan') {
@@ -323,7 +324,7 @@
     }
   }
 
-  // Auto Archive Action on Roblox Table Row
+  // Auto Archive Action
   async function archiveRowBySoundId(soundId) {
     const rows = document.querySelectorAll('table tbody tr, [role="row"]');
 
@@ -336,7 +337,6 @@
         const cells = row.querySelectorAll('td, [role="cell"]');
         const lastCell = cells.length > 0 ? cells[cells.length - 1] : row;
 
-        // Search for 3-dots button in the last cell or row
         let moreBtn = lastCell.querySelector('button') ||
                       row.querySelector('button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="menu" i]');
 
@@ -356,7 +356,6 @@
         moreBtn.click();
         await wait(1000);
 
-        // Search for 'Archive' menu item across all active popovers/menus
         const menuSelectors = [
           '[role="menu"] [role="menuitem"]',
           '[role="menuitem"]',
@@ -395,7 +394,6 @@
           log(`Mengeklik pilihan "Archive" untuk ID ${soundId}...`);
           await wait(1200);
 
-          // Check if confirmation modal dialog appears
           const dialogBtns = document.querySelectorAll('[role="dialog"] button, .MuiDialogActions-root button');
           for (const btn of dialogBtns) {
             const btnText = btn.textContent?.trim() || '';
@@ -694,7 +692,7 @@
   // Main Asset Loop Controller
   async function processAssetsLoop() {
     chrome.storage.local.get(
-      ['rbx_auto_active', 'rbx_ids', 'rbx_audio_data', 'rbx_moderated_data', 'rbx_mode', 'rbx_index', 'usernames', 'universeId'],
+      ['rbx_auto_active', 'rbx_needs_rescan', 'rbx_ids', 'rbx_audio_data', 'rbx_moderated_data', 'rbx_mode', 'rbx_index', 'usernames', 'universeId'],
       async (data) => {
         if (data.rbx_auto_active !== true) return;
 
@@ -702,6 +700,7 @@
         const allData = data.rbx_audio_data || [];
         const mode = data.rbx_mode || 'both';
         let index = parseInt(data.rbx_index || 0, 10);
+        const needsRescan = data.rbx_needs_rescan === true;
 
         if (mode === 'archive_moderated') {
           if (window.location.href.includes('/creations')) {
@@ -712,8 +711,8 @@
           return;
         }
 
-        // ALWAYS ensure full scan if IDs list is empty or starting fresh
-        if (ids.length === 0) {
+        // ALWAYS force full rescan of all pages if fresh start or rbx_needs_rescan flag is active
+        if (needsRescan || ids.length === 0) {
           if (window.location.href.includes('/creations')) {
             await scanAllPages(mode);
           } else {
@@ -819,7 +818,7 @@
         <div class="hud-song-info" id="hudSongInfo">
           Status: <strong>Idle</strong>
         </div>
-        <div class="hud-logs-box" id="hudLogs">[AutoPerm] Multi-Page Scanner & Reliable Auto Archive active.</div>
+        <div class="hud-logs-box" id="hudLogs">[AutoPerm] Guaranteed Multi-Page Rescan active.</div>
         <div class="hud-actions">
           <button id="hudStopBtn" class="hud-action-btn hud-btn-stop">Stop</button>
           <button id="hudResetBtn" class="hud-action-btn hud-btn-reset">Reset</button>
@@ -836,13 +835,14 @@
     });
 
     document.getElementById('hudStopBtn').addEventListener('click', () => {
-      chrome.storage.local.set({ rbx_auto_active: false });
+      chrome.storage.local.set({ rbx_auto_active: false, rbx_needs_rescan: false });
       log("DIHENTIKAN via HUD");
     });
 
     document.getElementById('hudResetBtn').addEventListener('click', () => {
       chrome.storage.local.set({
         rbx_auto_active: false,
+        rbx_needs_rescan: false,
         rbx_index: 0,
         rbx_ids: [],
         rbx_audio_data: [],
