@@ -1,4 +1,4 @@
-// Roblox Auto Permission - Content Script v10.4 (Instant Skip & Robust Dialog Close)
+// Roblox Auto Permission - Content Script v10.5 (Full Multi-Page Scan & Reliable Auto Archive)
 
 (function () {
   'use strict';
@@ -110,8 +110,10 @@
     for (const svg of svgs) {
       const html = svg.outerHTML.toLowerCase();
       if (html.includes('ban') || html.includes('prohibited') || html.includes('lock') ||
-          html.includes('circle-slash') || html.includes('d="m12 2a10 10')) {
-        return true;
+          html.includes('circle-slash') || html.includes('d="m12 2a10 10') ||
+          svg.getAttribute('data-testid')?.includes('Chevron') === false && html.includes('path')) {
+        // If row SVG contains prohibition symbol or ban icon shape
+        if (html.includes('ban') || html.includes('prohibit') || html.includes('slash')) return true;
       }
     }
 
@@ -184,14 +186,17 @@
     return { cleanData, moderatedData };
   }
 
+  // Next Page Button Finder (Comprehensive MUI & ARIA Paginator Selector)
   function getNextPageButton() {
+    // 1. Direct attribute & class selectors
     const candidates = [
       'button[aria-label="Go to next page"]:not([disabled])',
       'button[aria-label="Next page"]:not([disabled])',
       'button[aria-label*="next" i]:not([disabled])',
-      'nav[aria-label*="pagination" i] button:last-child:not([disabled])',
+      '.MuiPaginationItem-next:not([disabled])',
+      'button.MuiPaginationItem-root:last-child:not([disabled])',
       'ul.MuiPagination-ul li:last-child button:not([disabled])',
-      '.MuiPaginationItem-next:not([disabled])'
+      'nav[aria-label*="pagination" i] button:last-child:not([disabled])'
     ];
 
     for (const sel of candidates) {
@@ -199,22 +204,38 @@
       if (btn && !btn.disabled) return btn;
     }
 
-    const allButtons = Array.from(document.querySelectorAll('nav button, table ~ div button, footer button'));
-    for (const btn of allButtons) {
-      const text = btn.textContent?.trim() || '';
-      const aria = btn.getAttribute('aria-label') || '';
-      if ((text === '>' || text === 'Next' || aria.includes('next')) && !btn.disabled) {
-        return btn;
+    // 2. Search all buttons inside pagination nav or bottom container for SVG icons
+    const paginators = document.querySelectorAll('nav, ul.MuiPagination-ul, table ~ div');
+    for (const pag of paginators) {
+      const btns = Array.from(pag.querySelectorAll('button:not([disabled])'));
+      for (const btn of btns) {
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        const svg = btn.querySelector('svg');
+        const svgTestId = svg ? (svg.getAttribute('data-testid') || '').toLowerCase() : '';
+
+        if (aria.includes('next') || svgTestId.includes('chevronright') || svgTestId.includes('navigatenext')) {
+          return btn;
+        }
+      }
+
+      // If last button in pagination is active and not disabled
+      if (btns.length > 0) {
+        const lastBtn = btns[btns.length - 1];
+        const aria = (lastBtn.getAttribute('aria-label') || '').toLowerCase();
+        if (aria.includes('next') || aria.includes('go to next')) {
+          return lastBtn;
+        }
       }
     }
 
     return null;
   }
 
+  // Scan All Pages Function (Scans ALL pages on creations table)
   async function scanAllPages(mode) {
-    log("Mulai scan otomatis semua halaman Audio...");
+    log("=== MEMULAI SCAN SEMUA HALAMAN AUDIO ===");
     await waitForElement('table, [role="table"]', 15000);
-    await wait(1000);
+    await wait(1200);
 
     let allClean = [];
     let allModerated = [];
@@ -222,27 +243,33 @@
 
     while (true) {
       const { cleanData, moderatedData } = scanAudioData();
-      log(`Halaman ${page}: ${cleanData.length} audio lulus, ${moderatedData.length} audio ter-moderasi`);
-      allClean = allClean.concat(cleanData);
-      allModerated = allModerated.concat(moderatedData);
+      log(`Halaman ${page}: Ditemukan ${cleanData.length} audio lulus, ${moderatedData.length} audio ter-moderasi`);
+
+      // Merge unique
+      cleanData.forEach(item => {
+        if (!allClean.some(x => x.sound_id === item.sound_id)) allClean.push(item);
+      });
+      moderatedData.forEach(item => {
+        if (!allModerated.some(x => x.sound_id === item.sound_id)) allModerated.push(item);
+      });
 
       const nextBtn = getNextPageButton();
       if (!nextBtn) {
-        log("Scan selesai: tidak ada halaman berikutnya.");
+        log(`Paginasi selesai: Total ${page} halaman telah dipindai ✔`);
         break;
       }
 
-      log(`Pindah ke Halaman ${page + 1}...`);
+      log(`Pindah dari Halaman ${page} ke Halaman ${page + 1}...`);
       nextBtn.click();
       page++;
-      await wait(2500);
+      await wait(3000); // Wait for next page table rows to render
       await waitForElement('table, [role="table"]', 10000);
       await wait(1000);
     }
 
-    log(`============================`);
-    log(`SCAN TOTAL SELESAI: ${allClean.length} LULUS, ${allModerated.length} TER-MODERASI`);
-    log(`============================`);
+    log(`================================================`);
+    log(`SCAN SELESAI: Total ${allClean.length} Audio Lulus | ${allModerated.length} Ter-Moderasi`);
+    log(`================================================`);
 
     const targetIds = (mode === 'archive_moderated') ?
                       allModerated.map(d => d.sound_id) :
@@ -258,7 +285,7 @@
 
     if (mode === 'scan') {
       await chrome.storage.local.set({ rbx_auto_active: false });
-      alert(`SCAN SELESAI ✔\nAudio Lulus: ${allClean.length}\nAudio Moderasi: ${allModerated.length}\nBuka Extension Popup untuk melihat JSON.`);
+      alert(`SCAN SELESAI ✔\nTotal Halaman: ${page}\nAudio Lulus: ${allClean.length}\nAudio Moderasi: ${allModerated.length}\nBuka Extension Popup untuk melihat JSON.`);
       return;
     }
 
@@ -294,6 +321,117 @@
       log(`============================`);
       alert(`SEMUA LAGU SELESAI DIPROSES ✔\nTotal: ${ids.length} audio.`);
     }
+  }
+
+  // Auto Archive Action on Roblox Table Row
+  async function archiveRowBySoundId(soundId) {
+    const rows = document.querySelectorAll('table tbody tr, [role="row"]');
+
+    for (const row of rows) {
+      const rowText = row.textContent || '';
+      const hasId = rowText.includes(soundId) ||
+                    Array.from(row.querySelectorAll('a[href]')).some(a => a.href.includes(soundId));
+
+      if (hasId) {
+        const cells = row.querySelectorAll('td, [role="cell"]');
+        const lastCell = cells.length > 0 ? cells[cells.length - 1] : row;
+
+        // Search for 3-dots button in the last cell or row
+        let moreBtn = lastCell.querySelector('button') ||
+                      row.querySelector('button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="menu" i]');
+
+        if (!moreBtn) {
+          const rowBtns = row.querySelectorAll('button');
+          if (rowBtns.length > 0) {
+            moreBtn = rowBtns[rowBtns.length - 1];
+          }
+        }
+
+        if (!moreBtn) {
+          log(`⚠️ Tidak menemukan tombol 3 dots pada baris ID ${soundId}`);
+          return false;
+        }
+
+        log(`Mengeklik menu 3-dots (ID: ${soundId})...`);
+        moreBtn.click();
+        await wait(1000);
+
+        // Search for 'Archive' menu item across all active popovers/menus
+        const menuSelectors = [
+          '[role="menu"] [role="menuitem"]',
+          '[role="menuitem"]',
+          '.MuiPopover-root li',
+          '.MuiPopover-root button',
+          '.MuiMenu-list li',
+          'div[role="presentation"] li',
+          'div[role="menu"] div'
+        ];
+
+        let archiveMenuItem = null;
+        for (const sel of menuSelectors) {
+          const items = document.querySelectorAll(sel);
+          for (const item of items) {
+            const txt = item.textContent?.trim() || '';
+            if (txt === 'Archive' || txt.includes('Archive')) {
+              archiveMenuItem = item;
+              break;
+            }
+          }
+          if (archiveMenuItem) break;
+        }
+
+        if (!archiveMenuItem) {
+          const allEls = document.querySelectorAll('.MuiPopover-root *, [role="menu"] *');
+          for (const el of allEls) {
+            if (el.children.length === 0 && el.textContent?.trim() === 'Archive') {
+              archiveMenuItem = el;
+              break;
+            }
+          }
+        }
+
+        if (archiveMenuItem) {
+          archiveMenuItem.click();
+          log(`Mengeklik pilihan "Archive" untuk ID ${soundId}...`);
+          await wait(1200);
+
+          // Check if confirmation modal dialog appears
+          const dialogBtns = document.querySelectorAll('[role="dialog"] button, .MuiDialogActions-root button');
+          for (const btn of dialogBtns) {
+            const btnText = btn.textContent?.trim() || '';
+            if (btnText === 'Archive' || btnText.includes('Archive')) {
+              btn.click();
+              log(`Konfirmasi Archive diklik ✔`);
+              await wait(1000);
+              break;
+            }
+          }
+          return true;
+        } else {
+          log(`⚠️ Pilihan menu "Archive" tidak ditemukan pada popover`);
+        }
+      }
+    }
+
+    return false;
+  }
+
+  async function processArchiveModerated(moderatedList) {
+    log(`Mulai Mengarsip ${moderatedList.length} Audio Moderasi...`);
+    for (let i = 0; i < moderatedList.length; i++) {
+      const track = moderatedList[i];
+      log(`[${i + 1}/${moderatedList.length}] Mengarsip: ${track.title} (ID: ${track.sound_id})`);
+      const success = await archiveRowBySoundId(track.sound_id);
+      if (success) {
+        log(`✔ Berhasil Diarsip: ${track.sound_id}`);
+      } else {
+        log(`⚠️ Gagal diarsip untuk ID: ${track.sound_id}`);
+      }
+      await wait(1500);
+    }
+    await chrome.storage.local.set({ rbx_auto_active: false });
+    log("Proses Arsip Audio Moderasi Selesai ✔");
+    alert(`PROSES ARSIP SELESAI ✔\nTotal ${moderatedList.length} audio telah diarsip.`);
   }
 
   // Close Modal Dialog Helper
@@ -403,7 +541,6 @@
     await switchToCollaboratorsTab();
     await wait(800);
 
-    // 1. FAST-CHECK: Check if ALL target usernames ALREADY exist on page before opening modal!
     const missingUsernames = usernames.filter(u => !alreadyExists(u));
 
     if (missingUsernames.length === 0) {
@@ -575,11 +712,12 @@
           return;
         }
 
+        // ALWAYS ensure full scan if IDs list is empty or starting fresh
         if (ids.length === 0) {
           if (window.location.href.includes('/creations')) {
             await scanAllPages(mode);
           } else {
-            log("Mengarahkan ke halaman Audio Creations untuk scan semua ID...");
+            log("Mengarahkan ke halaman Audio Creations untuk memindai SEMUA halaman ID...");
             window.location.href = 'https://create.roblox.com/dashboard/creations?activeTab=Audio';
           }
           return;
@@ -681,7 +819,7 @@
         <div class="hud-song-info" id="hudSongInfo">
           Status: <strong>Idle</strong>
         </div>
-        <div class="hud-logs-box" id="hudLogs">[AutoPerm] Instant Skip & Fast Navigation Active.</div>
+        <div class="hud-logs-box" id="hudLogs">[AutoPerm] Multi-Page Scanner & Reliable Auto Archive active.</div>
         <div class="hud-actions">
           <button id="hudStopBtn" class="hud-action-btn hud-btn-stop">Stop</button>
           <button id="hudResetBtn" class="hud-action-btn hud-btn-reset">Reset</button>
