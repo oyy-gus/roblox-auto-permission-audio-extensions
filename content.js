@@ -1,4 +1,4 @@
-// Roblox Auto Permission - Content Script v10.6 (Full Multi-Page Scan & Rescan Guarantee)
+// Roblox Auto Permission - Content Script v10.7 (Maximal Button & Interaction Reliability)
 
 (function () {
   'use strict';
@@ -10,6 +10,16 @@
 
   let hudElement = null;
   let recentLogs = [];
+
+  // Pause Helper — waits in loop while rbx_paused is true
+  async function waitIfPaused() {
+    while (true) {
+      const data = await new Promise(resolve => chrome.storage.local.get(['rbx_paused', 'rbx_auto_active'], resolve));
+      if (!data.rbx_auto_active) return; // stopped
+      if (!data.rbx_paused) return;      // not paused
+      await wait(500); // poll every 500ms while paused
+    }
+  }
 
   // Log Helper
   async function log(msg) {
@@ -33,6 +43,56 @@
     });
   }
 
+  // Check if button/element is disabled across all MUI, Radix, Foundation CSS patterns
+  function isButtonDisabled(btn) {
+    if (!btn) return true;
+    return btn.hasAttribute('disabled') ||
+           btn.disabled === true ||
+           btn.classList.contains('Mui-disabled') ||
+           btn.classList.contains('opacity-[0.5]') ||
+           btn.getAttribute('aria-disabled') === 'true' ||
+           btn.getAttribute('disabled') !== null;
+  }
+
+  // Maximal Click Simulator (Triggers Pointer, Mouse, Focus, and Touch/Keyboard events)
+  function simulateClick(el) {
+    if (!el || isButtonDisabled(el)) return false;
+    try {
+      el.scrollIntoView({ block: 'center', inline: 'nearest' });
+    } catch (e) {}
+    try {
+      el.focus();
+    } catch (e) {}
+
+    const opts = { bubbles: true, cancelable: true, view: window, composed: true };
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.click();
+    return true;
+  }
+
+  // Native Value Setter for React 16+ Controlled Inputs
+  function setNativeValue(el, value) {
+    if (!el) return;
+    const previousValue = el.value;
+    const prototype = Object.getPrototypeOf(el);
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value') ||
+                       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    const setter = descriptor?.set;
+    if (setter) {
+      setter.call(el, value);
+    } else {
+      el.value = value;
+    }
+    if (el._valueTracker) {
+      el._valueTracker.setValue(previousValue);
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
   // DOM Helpers
   async function waitForElement(selector, timeout = 15000, root = document) {
     const start = Date.now();
@@ -44,33 +104,20 @@
     return null;
   }
 
-  function setNativeValue(el, value) {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set ||
-                   Object.getOwnPropertyDescriptor(Element.prototype, 'value')?.set;
-    if (setter) {
-      setter.call(el, value);
-    } else {
-      el.value = value;
-    }
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-
   async function typeUsername(input, text) {
-    input.focus();
-    input.click();
-    await wait(300);
-    setNativeValue(input, '');
+    simulateClick(input);
     await wait(200);
+    setNativeValue(input, '');
+    await wait(150);
     for (const char of text) {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
       setNativeValue(input, input.value + char);
       input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-      await wait(100 + Math.random() * 60);
+      await wait(60 + Math.random() * 40);
     }
   }
 
-  async function retry(fn, attempts = 4, delay = 1200) {
+  async function retry(fn, attempts = 4, delay = 1000) {
     for (let i = 0; i < attempts; i++) {
       if (await fn()) return true;
       await wait(delay);
@@ -80,52 +127,122 @@
 
   function alreadyExists(username) {
     if (!username) return false;
-    const bodyText = document.body ? document.body.innerText.toLowerCase() : '';
-    return bodyText.includes(username.toLowerCase());
-  }
+    const lower = username.toLowerCase().trim();
+    const cleanUser = lower.startsWith('@') ? lower.slice(1) : lower;
 
-  // Moderation Check Helper
-  function isAudioModerated() {
-    const pageText = document.body ? document.body.innerText : '';
-    if (pageText.includes('Your audio was moderated.') ||
-        pageText.includes('Removed for violations of Roblox Terms of Use')) {
+    const bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+    if (bodyText.includes(cleanUser) || bodyText.includes(`@${cleanUser}`)) {
       return true;
     }
 
-    const descInput = document.querySelector('textarea#description, textarea[name="description"]');
-    if (descInput && descInput.value.includes('Removed for violations of Roblox Terms of Use')) {
-      return true;
-    }
-
-    const alertBanner = document.querySelector('.MuiAlert-root, [class*="Alert"], [class*="alert"]');
-    if (alertBanner && alertBanner.textContent.toLowerCase().includes('moderated')) {
-      return true;
+    const cells = document.querySelectorAll('td, th, [role="cell"], [data-testid*="permission"], a[href*="users"], a[href*="groups"]');
+    for (const cell of cells) {
+      const txt = cell.textContent.toLowerCase();
+      if (txt.includes(cleanUser)) return true;
     }
 
     return false;
   }
 
-  function isRowModerated(row) {
+  function alreadyExistsExperience(universeId) {
+    if (!universeId) return false;
+    const cleanId = String(universeId).trim();
+    if (!cleanId) return false;
+
+    const bodyText = (document.body ? document.body.innerText : '');
+    if (bodyText.includes(cleanId)) return true;
+
+    const cells = document.querySelectorAll('#Experiences td, #Experiences [role="cell"], [data-testid="experiences-permission-tab"] *');
+    for (const cell of cells) {
+      if (cell.textContent.includes(cleanId)) return true;
+    }
+
+    return false;
+  }
+
+  // Moderation Check Helper
+  function getAudioModerationInfo() {
+    const pageText = document.body ? document.body.innerText : '';
+    const hasModBanner = pageText.includes('Your audio was moderated.') ||
+                         pageText.includes('Removed for violations of Roblox Terms of Use');
+
+    const nameInput = document.querySelector('input#name, input[name="name"], [data-testid="asset-name-input"]');
+    const nameValue = nameInput ? nameInput.value : '';
+    const pageTitle = document.title || '';
+    const hasHashtagTitle = nameValue.includes('#####') || pageTitle.includes('#####') || pageText.includes('##################################################');
+
+    const descInput = document.querySelector('textarea#description, textarea[name="description"]');
+    const descValue = descInput ? descInput.value : '';
+    const hasModDesc = descValue.includes('Removed for violations') || descValue.includes('#####');
+
+    const alertBanner = document.querySelector('.MuiAlert-root, [class*="Alert"], [class*="alert"]');
+    const hasAlert = alertBanner && alertBanner.textContent.toLowerCase().includes('moderated');
+
+    const unapprovedImg = document.querySelector('img[src*="UnapprovedImage"], img[src*="moderated"]');
+
+    const isModerated = hasModBanner || hasHashtagTitle || hasModDesc || hasAlert || Boolean(unapprovedImg);
+    const isRenameNeeded = hasHashtagTitle;
+
+    return {
+      isModerated,
+      isRenameNeeded,
+      reason: isRenameNeeded ? "Judul audio ter-moderasi (PERLU DIGANTI NAMA)" : "Audio ter-moderasi oleh sistem Roblox"
+    };
+  }
+
+  function isAudioModerated() {
+    return getAudioModerationInfo().isModerated;
+  }
+
+  // 404 Page Detector — checks if current page is a Roblox 404
+  function is404Page() {
+    const bodyText = document.body ? document.body.innerText : '';
+    const title = document.title || '';
+    return bodyText.includes("We couldn't find the page you were looking for") ||
+           bodyText.includes('404 Page Not Found') ||
+           title.includes('404') ||
+           document.querySelector('.web-blox-css-tss-5uh6hj-Grid-root-loggedinErrorArea, [class*="loggedinErrorArea"]') !== null;
+  }
+
+  // Returns null if not moderated, or { level: 'FATAL'|'LOW', reason } if moderated
+  function getRowModerationLevel(row) {
+    const rowText = row.textContent || '';
+    const hasHashtagTitle = rowText.includes('#####') || rowText.includes('##################################################');
+    const hasModText = rowText.includes('Removed for violations') || rowText.includes('Your audio was moderated');
+
     const svgs = row.querySelectorAll('svg');
+    let hasModSvg = false;
     for (const svg of svgs) {
       const html = svg.outerHTML.toLowerCase();
       if (html.includes('ban') || html.includes('prohibited') || html.includes('lock') ||
           html.includes('circle-slash') || html.includes('d="m12 2a10 10')) {
-        return true;
+        hasModSvg = true;
+        break;
       }
     }
 
-    const rowText = row.textContent || '';
-    if (rowText.includes('#####') || rowText.includes('Removed for violations')) {
-      return true;
+    const imgs = row.querySelectorAll('img');
+    let hasUnapprovedImg = false;
+    for (const img of imgs) {
+      const src = img.src || '';
+      if (src.includes('UnapprovedImage') || src.includes('moderated') || src.includes('ban')) {
+        hasUnapprovedImg = true;
+        break;
+      }
     }
 
-    const img = row.querySelector('img');
-    if (img && (img.src.includes('moderated') || img.src.includes('ban'))) {
-      return true;
+    // LOW = only rename needed (##### title), FATAL = fully blocked/removed
+    if (hasHashtagTitle && !hasModText && !hasUnapprovedImg && !hasModSvg) {
+      return { level: 'LOW', reason: 'Judul ter-moderasi — hanya perlu ganti nama' };
     }
+    if (hasModText || hasUnapprovedImg || hasModSvg) {
+      return { level: 'FATAL', reason: 'Audio diblokir/dihapus oleh sistem Roblox' };
+    }
+    return null;
+  }
 
-    return false;
+  function isRowModerated(row) {
+    return getRowModerationLevel(row) !== null;
   }
 
   // Table Scanner
@@ -151,6 +268,14 @@
       });
 
       if (!soundId) {
+        const idBtn = row.querySelector('button[aria-label*="Asset ID"]');
+        if (idBtn) {
+          const btnMatch = idBtn.getAttribute('aria-label').match(/\d{8,20}/);
+          if (btnMatch) soundId = btnMatch[0];
+        }
+      }
+
+      if (!soundId) {
         const cells = row.querySelectorAll('td, th, [role="cell"]');
         cells.forEach(cell => {
           const txt = cell.textContent.trim();
@@ -167,10 +292,14 @@
 
       if (soundId && !seenIds.has(soundId)) {
         seenIds.add(soundId);
+        const modLevel = getRowModerationLevel(row);
         const item = {
-          title: title || `Audio ${soundId}`,
-          sound_id: soundId,
-          moderated: isRowModerated(row)
+          soundId: soundId,
+          soundTitle: title || `Audio ${soundId}`,
+          soundThumbnail: "",
+          moderated: modLevel !== null,
+          moderationLevel: modLevel ? modLevel.level : null,
+          moderationReason: modLevel ? modLevel.reason : null
         };
 
         if (item.moderated) {
@@ -184,31 +313,29 @@
     return { cleanData, moderatedData };
   }
 
-  // Next Page Button Finder (Matches Roblox's button[aria-label="Next page"])
+  // Next Page Button Finder (Matches Roblox Foundation UI & MUI Table Pagination)
   function getNextPageButton() {
-    const candidates = [
+    const selectors = [
       'button[aria-label="Next page"]',
       'button[aria-label="Go to next page"]',
+      'button[title="Go to next page"]',
       'button[aria-label*="next" i]',
-      '.MuiPaginationItem-next'
+      '.MuiPaginationItem-next',
+      '.MuiTablePagination-actions button:last-child'
     ];
 
-    for (const sel of candidates) {
+    for (const sel of selectors) {
       const btn = document.querySelector(sel);
-      if (btn) {
-        const isDisabled = btn.hasAttribute('disabled') ||
-                           btn.disabled === true ||
-                           btn.classList.contains('opacity-[0.5]') ||
-                           btn.getAttribute('aria-disabled') === 'true';
-        if (!isDisabled) return btn;
+      if (btn && !isButtonDisabled(btn)) {
+        return btn;
       }
     }
 
     const allButtons = Array.from(document.querySelectorAll('button'));
     for (const btn of allButtons) {
       const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-      const isDisabled = btn.hasAttribute('disabled') || btn.classList.contains('opacity-[0.5]');
-      if (aria.includes('next page') && !isDisabled) {
+      const title = (btn.getAttribute('title') || '').toLowerCase();
+      if ((aria.includes('next page') || title.includes('next page')) && !isButtonDisabled(btn)) {
         return btn;
       }
     }
@@ -218,13 +345,31 @@
 
   // Check and click First Page button if not on Page 1
   async function resetToFirstPage() {
-    const firstBtn = document.querySelector('button[aria-label="First page"]:not([disabled])') ||
-                     document.querySelector('button[aria-label*="first" i]:not([disabled])');
+    const selectors = [
+      'button[aria-label="First page"]',
+      'button[aria-label="Go to first page"]',
+      'button[aria-label="Go to previous page"]',
+      'button[title="Go to previous page"]',
+      '.MuiTablePagination-actions button:first-child'
+    ];
 
-    if (firstBtn && !firstBtn.hasAttribute('disabled') && !firstBtn.classList.contains('opacity-[0.5]')) {
+    let prevBtn = null;
+    for (const sel of selectors) {
+      const btn = document.querySelector(sel);
+      if (btn && !isButtonDisabled(btn)) {
+        prevBtn = btn;
+        break;
+      }
+    }
+
+    if (prevBtn) {
       log("Kembali ke Halaman Pertama (First Page)...");
-      firstBtn.click();
-      await wait(2500);
+      while (prevBtn && !isButtonDisabled(prevBtn)) {
+        simulateClick(prevBtn);
+        await wait(1500);
+        prevBtn = document.querySelector(selectors[0]) || document.querySelector(selectors[1]) || document.querySelector(selectors[2]);
+      }
+      await wait(1000);
       await waitForElement('table tbody tr', 10000);
     }
   }
@@ -233,7 +378,7 @@
   async function scanAllPages(mode) {
     log("=== MEMULAI PEMINDAIAN SELURUH HALAMAN AUDIO ===");
     await waitForElement('table, [role="table"]', 15000);
-    await wait(1200);
+    await wait(1000);
 
     // Reset to page 1 first if on another page
     await resetToFirstPage();
@@ -243,14 +388,20 @@
     let page = 1;
 
     while (true) {
+      await waitIfPaused();
+      const stateCheck = await new Promise(resolve => chrome.storage.local.get(['rbx_auto_active'], resolve));
+      if (!stateCheck.rbx_auto_active) { log('Scan dihentikan.'); return; }
+
       const { cleanData, moderatedData } = scanAudioData();
       log(`Halaman ${page}: Ditemukan ${cleanData.length} audio lulus, ${moderatedData.length} audio ter-moderasi`);
 
       cleanData.forEach(item => {
-        if (!allClean.some(x => x.sound_id === item.sound_id)) allClean.push(item);
+        const id = item.soundId || item.sound_id;
+        if (!allClean.some(x => (x.soundId || x.sound_id) === id)) allClean.push(item);
       });
       moderatedData.forEach(item => {
-        if (!allModerated.some(x => x.sound_id === item.sound_id)) allModerated.push(item);
+        const id = item.soundId || item.sound_id;
+        if (!allModerated.some(x => (x.soundId || x.sound_id) === id)) allModerated.push(item);
       });
 
       const nextBtn = getNextPageButton();
@@ -260,20 +411,24 @@
       }
 
       log(`Pindah ke Halaman ${page + 1}...`);
-      nextBtn.click();
+      simulateClick(nextBtn);
       page++;
-      await wait(3000); // Wait for next page table rows to load
-      await waitForElement('table, [role="table"]', 10000);
-      await wait(1000);
+      await wait(2500);
+      await waitForElement('table tbody tr, [role="row"]', 10000);
+      await wait(800);
     }
 
+    const fatalCount = allModerated.filter(d => d.moderationLevel === 'FATAL').length;
+    const lowCount = allModerated.filter(d => d.moderationLevel === 'LOW').length;
+
     log(`================================================`);
-    log(`SCAN SELESAI: Total ${allClean.length} Audio Lulus | ${allModerated.length} Ter-Moderasi (${page} Halaman)`);
+    log(`SCAN SELESAI: ${allClean.length} Lulus | ${allModerated.length} Moderasi (${page} hal.)`);
+    log(`⛔ FATAL: ${fatalCount} | ⚠️ LOW (ganti nama): ${lowCount}`);
     log(`================================================`);
 
     const targetIds = (mode === 'archive_moderated') ?
-                      allModerated.map(d => d.sound_id) :
-                      allClean.map(d => d.sound_id);
+                      allModerated.map(d => d.soundId) :
+                      allClean.map(d => d.soundId);
 
     await chrome.storage.local.set({
       rbx_ids: targetIds,
@@ -286,7 +441,7 @@
 
     if (mode === 'scan') {
       await chrome.storage.local.set({ rbx_auto_active: false });
-      alert(`SCAN SELESAI ✔\nTotal Halaman: ${page}\nAudio Lulus: ${allClean.length}\nAudio Moderasi: ${allModerated.length}\nBuka Extension Popup untuk melihat JSON.`);
+      alert(`SCAN SELESAI ✔\nTotal Halaman: ${page}\nAudio Lulus: ${allClean.length}\n\n⛔ FATAL (diblokir/dihapus): ${fatalCount}\n⚠️ LOW (perlu ganti nama): ${lowCount}\n\nBuka Extension Popup > View JSON untuk detail.`);
       return;
     }
 
@@ -309,7 +464,7 @@
   async function goToNextTrack(currentIndex, ids) {
     const nextIndex = currentIndex + 1;
     await chrome.storage.local.set({ rbx_index: nextIndex });
-    await wait(800);
+    await wait(600);
 
     if (nextIndex < ids.length) {
       const nextId = ids[nextIndex];
@@ -324,123 +479,241 @@
     }
   }
 
-  // Auto Archive Action
-  async function archiveRowBySoundId(soundId) {
-    const rows = document.querySelectorAll('table tbody tr, [role="row"]');
+  // === AUTO ARCHIVE via Roblox API + DOM Fallback ===
+  async function getCsrfToken() {
+    try {
+      const res = await fetch('https://auth.roblox.com/v2/logout', {
+        method: 'POST',
+        credentials: 'include'
+      });
+      const token = res.headers.get('x-csrf-token');
+      if (token) return token;
+    } catch (e) {}
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    if (meta) return meta.getAttribute('content');
+    return null;
+  }
 
+  async function archiveRowBySoundId(soundId) {
+    log(`Mencoba archive via API untuk ID: ${soundId}...`);
+    try {
+      const csrfToken = await getCsrfToken();
+      if (csrfToken) {
+        const res = await fetch(`https://develop.roblox.com/v1/assets/${soundId}/archive`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'X-CSRF-TOKEN': csrfToken, 'Content-Type': 'application/json' }
+        });
+        if (res.ok) {
+          log(`[API] Berhasil diarsip: ID ${soundId} (${res.status})`);
+          return true;
+        }
+        if (res.status === 403) {
+          const newToken = res.headers.get('x-csrf-token');
+          if (newToken) {
+            const retry = await fetch(`https://develop.roblox.com/v1/assets/${soundId}/archive`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'X-CSRF-TOKEN': newToken, 'Content-Type': 'application/json' }
+            });
+            if (retry.ok) {
+              log(`[API Retry] Berhasil diarsip: ID ${soundId}`);
+              return true;
+            }
+          }
+        }
+        const res2 = await fetch(`https://apis.roblox.com/assets/v1/assets/${soundId}`, {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'X-CSRF-TOKEN': csrfToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ archiveStatus: 'Archived' })
+        });
+        if (res2.ok) {
+          log(`[API v2] Berhasil diarsip: ID ${soundId}`);
+          return true;
+        }
+      }
+    } catch (err) {
+      log(`Error archive API untuk ID ${soundId}: ${err.message}`);
+    }
+
+    log(`API archive tidak berhasil/gagal, mencoba via DOM untuk ID: ${soundId}...`);
+    const rows = document.querySelectorAll('table tbody tr, [role="row"]');
     for (const row of rows) {
       const rowText = row.textContent || '';
       const hasId = rowText.includes(soundId) ||
                     Array.from(row.querySelectorAll('a[href]')).some(a => a.href.includes(soundId));
 
-      if (hasId) {
-        const cells = row.querySelectorAll('td, [role="cell"]');
-        const lastCell = cells.length > 0 ? cells[cells.length - 1] : row;
+      if (!hasId) continue;
 
-        let moreBtn = lastCell.querySelector('button') ||
-                      row.querySelector('button[aria-label*="option" i], button[aria-label*="more" i], button[aria-label*="menu" i]');
+      log(`Baris ditemukan untuk ID ${soundId}, melakukan hover...`);
 
-        if (!moreBtn) {
-          const rowBtns = row.querySelectorAll('button');
-          if (rowBtns.length > 0) {
-            moreBtn = rowBtns[rowBtns.length - 1];
+      // Force hover on the row — the 3-dots button is CSS-invisible until hover
+      row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }));
+      row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true }));
+      row.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, cancelable: true }));
+
+      // Also hover on the last cell where the button lives
+      const cells = row.querySelectorAll('td, [role="cell"]');
+      const lastCell = cells.length > 0 ? cells[cells.length - 1] : row;
+      lastCell.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      lastCell.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+
+      await wait(400);
+
+      // Find 3-dots button by icon class
+      let moreBtn = lastCell.querySelector('button .icon-filled-three-dots-vertical')?.closest('button') ||
+                    lastCell.querySelector('[class*="three-dots"]')?.closest('button') ||
+                    lastCell.querySelector('button[aria-haspopup="dialog"]') ||
+                    lastCell.querySelector('button');
+
+      if (!moreBtn) {
+        const presentationDivs = lastCell.querySelectorAll('[role="presentation"] button, div button');
+        for (const btn of presentationDivs) {
+          if (btn.querySelector('[class*="three-dots"]') || btn.querySelector('.icon-filled-three-dots-vertical')) {
+            moreBtn = btn;
+            break;
           }
         }
+      }
 
-        if (!moreBtn) {
-          log(`⚠️ Tidak menemukan tombol 3 dots pada baris ID ${soundId}`);
-          return false;
+      if (!moreBtn) {
+        const allBtns = lastCell.querySelectorAll('button');
+        if (allBtns.length > 0) moreBtn = allBtns[allBtns.length - 1];
+      }
+
+      if (!moreBtn) {
+        log(`⚠️ Tidak menemukan tombol 3-dots pada baris ID ${soundId}`);
+        return false;
+      }
+
+      log(`Mengeklik tombol 3-dots (ID: ${soundId})...`);
+      moreBtn.style.visibility = 'visible';
+      moreBtn.style.opacity = '1';
+      simulateClick(moreBtn);
+      await wait(1200);
+
+      let archiveMenuItem = null;
+      const menuSearchRoots = [
+        document,
+        ...Array.from(document.querySelectorAll('[data-radix-popper-content-wrapper], [data-radix-portal], #radix-portal'))
+      ];
+
+      for (const root of menuSearchRoots) {
+        const candidates = root.querySelectorAll('[role="menuitem"], [role="option"], [data-radix-collection-item], li, button');
+        for (const el of candidates) {
+          const txt = el.textContent?.trim() || '';
+          if (txt === 'Archive' || (txt.startsWith('Archive') && txt.length < 20)) {
+            archiveMenuItem = el;
+            break;
+          }
         }
+        if (archiveMenuItem) break;
+      }
 
-        log(`Mengeklik menu 3-dots (ID: ${soundId})...`);
-        moreBtn.click();
-        await wait(1000);
+      if (!archiveMenuItem) {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+        let node;
+        while ((node = walker.nextNode())) {
+          if (node.children.length === 0) {
+            const txt = node.textContent?.trim() || '';
+            if (txt === 'Archive') {
+              archiveMenuItem = node.closest('[role="menuitem"], li, button') || node;
+              break;
+            }
+          }
+        }
+      }
 
-        const menuSelectors = [
-          '[role="menu"] [role="menuitem"]',
-          '[role="menuitem"]',
-          '.MuiPopover-root li',
-          '.MuiPopover-root button',
-          '.MuiMenu-list li',
-          'div[role="presentation"] li',
-          'div[role="menu"] div'
+      if (archiveMenuItem) {
+        log(`Mengeklik menu "Archive" untuk ID ${soundId}...`);
+        simulateClick(archiveMenuItem);
+        await wait(1200);
+
+        const confirmSelectors = [
+          '[role="dialog"] button',
+          '[data-state="open"] button',
+          '.MuiDialogActions-root button',
+          '[data-radix-dialog-content] button'
         ];
 
-        let archiveMenuItem = null;
-        for (const sel of menuSelectors) {
-          const items = document.querySelectorAll(sel);
-          for (const item of items) {
-            const txt = item.textContent?.trim() || '';
-            if (txt === 'Archive' || txt.includes('Archive')) {
-              archiveMenuItem = item;
-              break;
-            }
-          }
-          if (archiveMenuItem) break;
-        }
-
-        if (!archiveMenuItem) {
-          const allEls = document.querySelectorAll('.MuiPopover-root *, [role="menu"] *');
-          for (const el of allEls) {
-            if (el.children.length === 0 && el.textContent?.trim() === 'Archive') {
-              archiveMenuItem = el;
-              break;
-            }
-          }
-        }
-
-        if (archiveMenuItem) {
-          archiveMenuItem.click();
-          log(`Mengeklik pilihan "Archive" untuk ID ${soundId}...`);
-          await wait(1200);
-
-          const dialogBtns = document.querySelectorAll('[role="dialog"] button, .MuiDialogActions-root button');
-          for (const btn of dialogBtns) {
+        for (const sel of confirmSelectors) {
+          const btns = document.querySelectorAll(sel);
+          for (const btn of btns) {
             const btnText = btn.textContent?.trim() || '';
-            if (btnText === 'Archive' || btnText.includes('Archive')) {
-              btn.click();
-              log(`Konfirmasi Archive diklik ✔`);
-              await wait(1000);
-              break;
+            if (btnText === 'Archive' || btnText.toLowerCase().includes('archive')) {
+              simulateClick(btn);
+              log(`✔ Konfirmasi Archive diklik (ID: ${soundId})`);
+              await wait(1200);
+              return true;
             }
           }
-          return true;
-        } else {
-          log(`⚠️ Pilihan menu "Archive" tidak ditemukan pada popover`);
         }
+
+        log(`⚠️ Dialog konfirmasi Archive tidak muncul untuk ID ${soundId}`);
+        return true;
+      } else {
+        log(`⚠️ Menu "Archive" tidak ditemukan setelah klik 3-dots (ID: ${soundId})`);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await wait(300);
+        return false;
       }
     }
 
+    log(`⚠️ Baris dengan ID ${soundId} tidak ditemukan di tabel`);
     return false;
   }
 
   async function processArchiveModerated(moderatedList) {
-    log(`Mulai Mengarsip ${moderatedList.length} Audio Moderasi...`);
-    for (let i = 0; i < moderatedList.length; i++) {
-      const track = moderatedList[i];
-      log(`[${i + 1}/${moderatedList.length}] Mengarsip: ${track.title} (ID: ${track.sound_id})`);
-      const success = await archiveRowBySoundId(track.sound_id);
+    // Only archive FATAL moderated audio (LOW just needs rename, not archive)
+    const fatalList = moderatedList.filter(t => t.moderationLevel === 'FATAL' || !t.moderationLevel);
+    log(`Mulai Mengarsip ${fatalList.length} Audio Moderasi FATAL dari ${moderatedList.length} total...`);
+    for (let i = 0; i < fatalList.length; i++) {
+      await waitIfPaused();
+      const stateCheck = await new Promise(resolve => chrome.storage.local.get(['rbx_auto_active'], resolve));
+      if (!stateCheck.rbx_auto_active) { log('Archive dihentikan.'); return; }
+
+      const track = fatalList[i];
+      const trackName = track.soundTitle || track.title || track.soundId || track.sound_id;
+      const trackId = track.soundId || track.sound_id;
+      log(`[${i + 1}/${fatalList.length}] Mengarsip: ${trackName} (ID: ${trackId})`);
+      const success = await archiveRowBySoundId(trackId);
       if (success) {
-        log(`✔ Berhasil Diarsip: ${track.sound_id}`);
+        log(`✔ Berhasil Diarsip: ${trackId}`);
       } else {
-        log(`⚠️ Gagal diarsip untuk ID: ${track.sound_id}`);
+        log(`⚠️ Gagal diarsip untuk ID: ${trackId}`);
       }
-      await wait(1500);
+      await wait(1200);
     }
     await chrome.storage.local.set({ rbx_auto_active: false });
     log("Proses Arsip Audio Moderasi Selesai ✔");
-    alert(`PROSES ARSIP SELESAI ✔\nTotal ${moderatedList.length} audio telah diarsip.`);
+    const lowList = moderatedList.filter(t => t.moderationLevel === 'LOW');
+    let msg = `PROSES ARSIP SELESAI ✔\nTotal ${fatalList.length} audio FATAL diarsip.`;
+    if (lowList.length > 0) {
+      msg += `\n\n⚠️ ${lowList.length} audio LOW tidak diarsip (hanya perlu ganti nama).`;
+    }
+    alert(msg);
   }
 
-  // Close Modal Dialog Helper
+  // Close Modal Dialog Helper (Clicks 'Done' / 'Close' on open dialogs)
   function closeModalDialog(label = 'Done') {
-    const buttons = document.querySelectorAll(
-      '[role="dialog"] button, [data-testid*="modal"] button, .MuiDialogActions-root button, button'
-    );
+    const dialogs = document.querySelectorAll('[role="dialog"], [data-testid*="modal"], .MuiDialog-root');
+    const root = dialogs.length > 0 ? dialogs[dialogs.length - 1] : document;
+
+    const buttons = root.querySelectorAll('button');
     for (const btn of buttons) {
       const text = btn.textContent?.trim() || '';
-      if (text === label || text === 'Done' || text === 'Close') {
-        try { btn.click(); return true; } catch(e){}
+      const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+      if (text === label || text === 'Done' || text === 'Close' || text === 'Selesai' ||
+          text.toLowerCase() === 'done' || text.toLowerCase() === 'close' ||
+          ariaLabel === 'close' || ariaLabel === 'done') {
+        try {
+          if (!isButtonDisabled(btn)) {
+            simulateClick(btn);
+            log(`Tombol '${text || ariaLabel}' pada dialog diklik ✔`);
+            return true;
+          }
+        } catch(e){}
       }
     }
     return false;
@@ -448,26 +721,27 @@
 
   async function waitDialogClose() {
     for (let i = 0; i < 8; i++) {
-      await wait(300);
+      await wait(250);
       const openDialog = document.querySelector('[data-testid="add-collaborators-modal"], [data-testid="add-experiences-modal"], [role="dialog"]');
       if (!openDialog) return true;
     }
     closeModalDialog('Done');
-    await wait(400);
+    await wait(300);
     return true;
   }
 
   async function clickSaveChanges() {
-    await wait(400);
+    await wait(300);
     for (const btn of document.querySelectorAll('button')) {
       const text = btn.textContent?.trim() || '';
       if (text.includes('Save Changes')) {
-        if (btn.disabled) {
+        if (isButtonDisabled(btn)) {
           log('Save Changes tidak aktif (sudah tersimpan) ✔');
           return true;
         }
-        btn.click();
+        simulateClick(btn);
         log('Save Changes diklik ✔');
+        await wait(1200);
         return true;
       }
     }
@@ -479,7 +753,7 @@
     return await retry(async () => {
       const tab = document.querySelector('button#Collaborators[role="tab"]') ||
                   Array.from(document.querySelectorAll('button[role="tab"]')).find(b => b.textContent.includes('Collaborators'));
-      if (tab) { tab.click(); await wait(1200); return true; }
+      if (tab) { simulateClick(tab); await wait(1000); return true; }
       return false;
     });
   }
@@ -489,8 +763,8 @@
       for (const btn of document.querySelectorAll('button')) {
         const text = btn.textContent?.trim() || '';
         if (text.includes('Add collaborators') || text.includes('+ Add collaborators')) {
-          btn.click();
-          await wait(1200);
+          simulateClick(btn);
+          await wait(1000);
           return true;
         }
       }
@@ -504,28 +778,30 @@
                      document.querySelector('[role="dialog"]') ||
                      Array.from(document.querySelectorAll('div')).find(d => d.textContent?.includes('Add Collaborators') && d.querySelector('input'));
       return dialog || false;
-    }, 10, 400);
+    }, 10, 300);
   }
 
   async function waitDropdown(timeout = 6000) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
       const opts = document.querySelectorAll(
-        '[role="listbox"] [role="option"], [role="option"], .MuiAutocomplete-option, [data-testid="autocomplete-option"]'
+        '[role="listbox"] [role="option"], [role="option"], .MuiAutocomplete-option, [data-testid="autocomplete-option"], .foundation-web-menu-item'
       );
       if (opts.length > 0) return opts;
-      await wait(300);
+      await wait(250);
     }
     return null;
   }
 
   async function selectUser(username) {
     const opts = document.querySelectorAll(
-      '[role="listbox"] [role="option"], [role="option"], .MuiAutocomplete-option, [data-testid="autocomplete-option"]'
+      '[role="listbox"] [role="option"], [role="option"], .MuiAutocomplete-option, [data-testid="autocomplete-option"], .foundation-web-menu-item'
     );
     for (const opt of opts) {
       if (opt.textContent?.toLowerCase().includes(username.toLowerCase())) {
-        opt.click(); await wait(600); return true;
+        simulateClick(opt);
+        await wait(500);
+        return true;
       }
     }
     return false;
@@ -534,10 +810,10 @@
   async function processCollaborators(usernames) {
     log("── [COLLABORATORS] ──");
     await waitForElement('button#Collaborators[role="tab"], button[role="tab"]', 15000);
-    await wait(800);
+    await wait(600);
 
     await switchToCollaboratorsTab();
-    await wait(800);
+    await wait(600);
 
     const missingUsernames = usernames.filter(u => !alreadyExists(u));
 
@@ -569,9 +845,9 @@
       if (!input) { log("Input username tidak ditemukan"); continue; }
 
       setNativeValue(input, '');
-      await wait(300);
+      await wait(200);
       await typeUsername(input, username);
-      await wait(500);
+      await wait(400);
 
       const opts = await waitDropdown(6000);
       if (!opts || opts.length === 0) {
@@ -589,14 +865,14 @@
 
       log(`${username} berhasil dipilih ✔`);
       addedCount++;
-      await wait(600);
+      await wait(500);
     }
 
     closeModalDialog('Done');
     await waitDialogClose();
-    await wait(600);
+    await wait(500);
     await clickSaveChanges();
-    await wait(1000);
+    await wait(800);
     log(`Collaborators selesai (${addedCount} ditambahkan) ✔`);
     return true;
   }
@@ -606,7 +882,7 @@
     return await retry(async () => {
       const tab = document.querySelector('button#Experiences[role="tab"]') ||
                   Array.from(document.querySelectorAll('button[role="tab"]')).find(b => b.textContent.includes('Experiences'));
-      if (tab) { tab.click(); await wait(1200); return true; }
+      if (tab) { simulateClick(tab); await wait(1000); return true; }
       return false;
     });
   }
@@ -616,7 +892,7 @@
       for (const btn of document.querySelectorAll('button')) {
         const text = btn.textContent?.trim() || '';
         if (text.includes('Add experiences')) {
-          btn.click(); await wait(1500); return true;
+          simulateClick(btn); await wait(1200); return true;
         }
       }
       return false;
@@ -630,7 +906,12 @@
     }
     log("── [EXPERIENCES] ──");
     await switchToExperiencesTab();
-    await wait(800);
+    await wait(600);
+
+    if (alreadyExistsExperience(universeId)) {
+      log(`⚡ INSTANT SKIP: Universe ID (${universeId}) SUDAH ADA pada lagu ini ✔`);
+      return;
+    }
 
     const opened = await openExperiencesDialog();
     if (!opened) { log("Gagal membuka dialog Experiences"); return; }
@@ -642,10 +923,10 @@
     const input = await waitForElement('#proposed-experience-search, input[placeholder*="search"], input[type="text"], input', 8000, dialog);
     if (!input) { log("Input experience tidak ditemukan"); return; }
 
-    input.focus();
+    simulateClick(input);
     setNativeValue(input, universeId);
     log(`Universe ID dimasukkan: ${universeId}`);
-    await wait(800);
+    await wait(600);
 
     log("Menunggu tombol Add...");
     let addBtn = null;
@@ -653,29 +934,31 @@
     while (Date.now() - addStart < 6000) {
       for (const btn of dialog.querySelectorAll('button')) {
         const text = btn.textContent?.trim() || '';
-        if (text === 'Add' && !btn.disabled) { addBtn = btn; break; }
+        if (text === 'Add' && !isButtonDisabled(btn)) { addBtn = btn; break; }
       }
       if (addBtn) break;
-      await wait(300);
+      await wait(250);
     }
 
     if (addBtn) {
-      addBtn.click();
+      simulateClick(addBtn);
       log("Tombol Add diklik ✔");
     } else {
       log("Tombol Add tidak aktif / tidak ditemukan");
     }
-    await wait(1000);
+    await wait(800);
 
     closeModalDialog('Done');
-    await wait(1000);
+    await wait(800);
     await waitDialogClose();
+    await wait(600);
+    await clickSaveChanges();
     await wait(800);
     log("Experiences selesai ✔");
   }
 
   async function processOneAsset(mode, settings) {
-    const usernames = settings.usernames || ["TBR SOCIETY"];
+    const usernames = settings.usernames || [];
     const universeId = settings.universeId || "";
 
     if (mode === "username") {
@@ -684,7 +967,7 @@
       await processExperiences(universeId);
     } else {
       await processCollaborators(usernames);
-      await wait(800);
+      await wait(600);
       await processExperiences(universeId);
     }
   }
@@ -742,18 +1025,78 @@
         const pageType = storeMatch ? storeMatch[2] : null;
 
         if (currentId !== id) {
+          // Before navigating, check if we're currently on a 404 page
+          // (Roblox sometimes redirects 404 URLs to dashboard/other pages)
+          if (is404Page()) {
+            const retryKey = `rbx_retry_${id}`;
+            const retryData = await new Promise(resolve => chrome.storage.local.get([retryKey], resolve));
+            const retryCount = retryData[retryKey] || 0;
+            const MAX_RETRY = 3;
+
+            if (retryCount < MAX_RETRY) {
+              await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
+              log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Membuka ulang halaman permission ID: ${id} dalam 3 detik...`);
+              await wait(3000);
+              window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
+            } else {
+              await chrome.storage.local.set({ [retryKey]: 0 });
+              const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
+              log(`🚧 [404] SKIP permanen setelah ${MAX_RETRY}x retry: "${songName404}" (ID: ${id})`);
+              const skippedList = data.rbx_404_ids || [];
+              if (!skippedList.includes(id)) {
+                skippedList.push(id);
+                await chrome.storage.local.set({ rbx_404_ids: skippedList });
+              }
+              await goToNextTrack(index, ids);
+            }
+            return;
+          }
           log(`[${index + 1}/${ids.length}] Navigasi ke ID: ${id}`);
           window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
           return;
         }
 
+        // ── 404 CHECK: after landing on the permissions page ──
+        await wait(800);
+        if (is404Page()) {
+          const retryKey = `rbx_retry_${id}`;
+          const retryData = await new Promise(resolve => chrome.storage.local.get([retryKey], resolve));
+          const retryCount = retryData[retryKey] || 0;
+          const MAX_RETRY = 3;
+
+          if (retryCount < MAX_RETRY) {
+            await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
+            log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Reload halaman permission ID: ${id} dalam 3 detik...`);
+            await wait(3000);
+            window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
+          } else {
+            await chrome.storage.local.set({ [retryKey]: 0 });
+            const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
+            log(`🚧 [404] SKIP permanen setelah ${MAX_RETRY}x retry: "${songName404}" (ID: ${id})`);
+            const skippedList = data.rbx_404_ids || [];
+            if (!skippedList.includes(id)) {
+              skippedList.push(id);
+              await chrome.storage.local.set({ rbx_404_ids: skippedList });
+            }
+            await goToNextTrack(index, ids);
+          }
+          return;
+        }
+
         if (pageType === 'configure') {
-          await wait(800);
-          if (isAudioModerated()) {
-            log(`⚠️ SKIP: Lagu (ID: ${id}) TERKENA MODERASI!`);
+          await wait(600);
+          const modInfo = getAudioModerationInfo();
+          if (modInfo.isModerated) {
+            const modLevel = modInfo.isRenameNeeded ? 'LOW' : 'FATAL';
+            if (modLevel === 'LOW') {
+              log(`⚠️ [LOW] SKIP: Lagu (ID: ${id}) PERLU DIGANTI NAMA! (Judul Ter-moderasi / #####)`);
+            } else {
+              log(`⛔ [FATAL] SKIP: Lagu (ID: ${id}) DIBLOKIR SISTEM ROBLOX! (${modInfo.reason})`);
+            }
             const moderatedList = data.rbx_moderated_data || [];
-            if (!moderatedList.some(m => m.sound_id === id)) {
-              moderatedList.push({ title: allData[index]?.title || id, sound_id: id, moderated: true });
+            if (!moderatedList.some(m => m.soundId === id)) {
+              const songTitle = allData[index]?.soundTitle || allData[index]?.title || id;
+              moderatedList.push({ soundId: id, soundTitle: songTitle, soundThumbnail: "", moderated: true, moderationLevel: modLevel, moderationReason: modInfo.reason });
               await chrome.storage.local.set({ rbx_moderated_data: moderatedList });
             }
             await goToNextTrack(index, ids);
@@ -765,7 +1108,7 @@
           return;
         }
 
-        const songName = allData[index]?.title || id;
+        const songName = allData[index]?.soundTitle || allData[index]?.title || id;
         log(`============================`);
         log(`[${index + 1}/${ids.length}] ${songName}`);
         log(`ID: ${id} | Mode: ${mode}`);
@@ -773,12 +1116,18 @@
 
         updateHUDInfo(songName, id, index + 1, ids.length, mode);
 
-        await wait(800);
-        if (isAudioModerated()) {
-          log(`⚠️ SKIP: Lagu "${songName}" (ID: ${id}) TERKENA MODERASI!`);
+        await wait(600);
+        const modInfo = getAudioModerationInfo();
+        if (modInfo.isModerated) {
+          const modLevel = modInfo.isRenameNeeded ? 'LOW' : 'FATAL';
+          if (modLevel === 'LOW') {
+            log(`⚠️ [LOW] SKIP: Lagu "${songName}" (ID: ${id}) PERLU DIGANTI NAMA! (##### ter-moderasi)`);
+          } else {
+            log(`⛔ [FATAL] SKIP: Lagu "${songName}" (ID: ${id}) DIBLOKIR SISTEM ROBLOX!`);
+          }
           const moderatedList = data.rbx_moderated_data || [];
-          if (!moderatedList.some(m => m.sound_id === id)) {
-            moderatedList.push({ title: songName, sound_id: id, moderated: true });
+          if (!moderatedList.some(m => m.soundId === id)) {
+            moderatedList.push({ soundId: id, soundTitle: songName, soundThumbnail: "", moderated: true, moderationLevel: modLevel, moderationReason: modInfo.reason });
             await chrome.storage.local.set({ rbx_moderated_data: moderatedList });
           }
           await goToNextTrack(index, ids);
@@ -818,10 +1167,11 @@
         <div class="hud-song-info" id="hudSongInfo">
           Status: <strong>Idle</strong>
         </div>
-        <div class="hud-logs-box" id="hudLogs">[AutoPerm] Guaranteed Multi-Page Rescan active.</div>
+        <div class="hud-logs-box" id="hudLogs">[AutoPerm] ⚠️ Wajib: Gunakan Bahasa Roblox (Creator Hub) dalam Bahasa Inggris (English).</div>
         <div class="hud-actions">
-          <button id="hudStopBtn" class="hud-action-btn hud-btn-stop">Stop</button>
-          <button id="hudResetBtn" class="hud-action-btn hud-btn-reset">Reset</button>
+          <button id="hudPauseBtn" class="hud-action-btn hud-btn-pause">⏸ Jeda</button>
+          <button id="hudStopBtn" class="hud-action-btn hud-btn-stop">⏹ Stop</button>
+          <button id="hudResetBtn" class="hud-action-btn hud-btn-reset">🔄 Reset</button>
         </div>
       </div>
     `;
@@ -834,14 +1184,23 @@
       hudMinBtn.textContent = hudElement.classList.contains('minimized') ? '+' : '—';
     });
 
+    document.getElementById('hudPauseBtn').addEventListener('click', () => {
+      chrome.storage.local.get(['rbx_paused'], (data) => {
+        const isPaused = data.rbx_paused === true;
+        chrome.storage.local.set({ rbx_paused: !isPaused });
+        log(isPaused ? '▶ DILANJUTKAN via HUD' : '⏸ DIJEDA via HUD');
+      });
+    });
+
     document.getElementById('hudStopBtn').addEventListener('click', () => {
-      chrome.storage.local.set({ rbx_auto_active: false, rbx_needs_rescan: false });
-      log("DIHENTIKAN via HUD");
+      chrome.storage.local.set({ rbx_auto_active: false, rbx_paused: false, rbx_needs_rescan: false });
+      log("⏹ DIHENTIKAN via HUD");
     });
 
     document.getElementById('hudResetBtn').addEventListener('click', () => {
       chrome.storage.local.set({
         rbx_auto_active: false,
+        rbx_paused: false,
         rbx_needs_rescan: false,
         rbx_index: 0,
         rbx_ids: [],
@@ -849,13 +1208,13 @@
         rbx_moderated_data: [],
         rbx_logs: []
       });
-      log("State di-reset via HUD");
+      log("🔄 State di-reset via HUD");
     });
 
     makeDraggable(hudElement, document.getElementById('hudHeader'));
 
     chrome.storage.local.get(
-      ['rbx_auto_active', 'rbx_mode', 'rbx_index', 'rbx_ids', 'rbx_logs'],
+      ['rbx_auto_active', 'rbx_paused', 'rbx_mode', 'rbx_index', 'rbx_ids', 'rbx_logs'],
       (data) => {
         syncHUDState(data);
       }
@@ -868,18 +1227,42 @@
     const hudProgressPct = document.getElementById('hudProgressPct');
     const hudBarFill = document.getElementById('hudBarFill');
     const hudLogs = document.getElementById('hudLogs');
+    const hudPauseBtn = document.getElementById('hudPauseBtn');
 
     if (!dot) return;
 
     const active = data.rbx_auto_active === true;
+    const paused = data.rbx_paused === true;
     const ids = data.rbx_ids || [];
     const index = parseInt(data.rbx_index || 0, 10);
     const mode = data.rbx_mode || '-';
 
-    if (active) {
+    if (active && paused) {
       dot.classList.add('active');
+      dot.style.background = '#f59e0b';
+      dot.style.boxShadow = '0 0 8px #f59e0b';
+    } else if (active) {
+      dot.classList.add('active');
+      dot.style.background = '';
+      dot.style.boxShadow = '';
     } else {
       dot.classList.remove('active');
+      dot.style.background = '';
+      dot.style.boxShadow = '';
+    }
+
+    if (hudPauseBtn) {
+      if (paused) {
+        hudPauseBtn.textContent = '▶ Lanjut';
+        hudPauseBtn.style.background = 'rgba(34,197,94,0.25)';
+        hudPauseBtn.style.borderColor = '#22c55e';
+        hudPauseBtn.style.color = '#86efac';
+      } else {
+        hudPauseBtn.textContent = '⏸ Jeda';
+        hudPauseBtn.style.background = '';
+        hudPauseBtn.style.borderColor = '';
+        hudPauseBtn.style.color = '';
+      }
     }
 
     if (ids.length > 0) {
@@ -938,7 +1321,7 @@
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local') {
       chrome.storage.local.get(
-        ['rbx_auto_active', 'rbx_mode', 'rbx_index', 'rbx_ids', 'rbx_logs'],
+        ['rbx_auto_active', 'rbx_paused', 'rbx_mode', 'rbx_index', 'rbx_ids', 'rbx_logs'],
         (data) => {
           syncHUDState(data);
         }
@@ -957,6 +1340,6 @@
   setTimeout(() => {
     createFloatingHUD();
     processAssetsLoop();
-  }, 2000);
+  }, 1500);
 
 })();

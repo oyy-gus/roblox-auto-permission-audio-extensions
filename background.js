@@ -6,7 +6,7 @@ chrome.runtime.onInstalled.addListener(() => {
   // Set default settings if not already present
   chrome.storage.local.get(['usernames', 'universeId'], (data) => {
     if (!data.usernames) {
-      chrome.storage.local.set({ usernames: ['TBR SOCIETY'] });
+      chrome.storage.local.set({ usernames: [] });
     }
     if (data.universeId === undefined) {
       chrome.storage.local.set({ universeId: '' });

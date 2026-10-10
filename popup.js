@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnScan = document.getElementById('btnScan');
   const btnArchiveModerated = document.getElementById('btnArchiveModerated');
   const btnStop = document.getElementById('btnStop');
+  const btnPause = document.getElementById('btnPause');
   const btnReset = document.getElementById('btnReset');
 
   const jsonModal = document.getElementById('jsonModal');
@@ -34,7 +35,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load Initial Settings
   chrome.storage.local.get(
-    ['usernames', 'universeId', 'rbx_auto_active', 'rbx_mode', 'rbx_index', 'rbx_ids', 'rbx_logs', 'rbx_audio_data', 'rbx_moderated_data'],
+    ['usernames', 'universeId', 'rbx_auto_active', 'rbx_paused', 'rbx_mode', 'rbx_index', 'rbx_ids', 'rbx_logs', 'rbx_audio_data', 'rbx_moderated_data'],
     (data) => {
       if (data.usernames) {
         inputUsernames.value = Array.isArray(data.usernames) ? data.usernames.join(', ') : data.usernames;
@@ -62,19 +63,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function updateUIState(data) {
     const active = data.rbx_auto_active === true;
+    const paused = data.rbx_paused === true;
     const mode = data.rbx_mode || 'standby';
     const ids = data.rbx_ids || [];
     const index = parseInt(data.rbx_index || 0, 10);
     const logs = data.rbx_logs || [];
 
-    if (active) {
+    if (active && paused) {
       statusBadge.classList.add('active');
+      statusBadge.classList.add('paused');
+      statusText.textContent = '⏸ DIJEDA';
+    } else if (active) {
+      statusBadge.classList.add('active');
+      statusBadge.classList.remove('paused');
       statusText.textContent = mode === 'scan' ? 'SCANNING ALL PAGES' :
                                mode === 'archive_moderated' ? 'ARCHIVING MODERATED' :
                                `RUNNING (${mode.toUpperCase()})`;
     } else {
       statusBadge.classList.remove('active');
+      statusBadge.classList.remove('paused');
       statusText.textContent = 'STANDBY';
+    }
+
+    // Update Pause button appearance
+    if (btnPause) {
+      if (paused) {
+        btnPause.textContent = '▶ Lanjutkan';
+        btnPause.classList.add('btn-resume');
+        btnPause.classList.remove('btn-pause');
+      } else {
+        btnPause.textContent = '⏸ Jeda';
+        btnPause.classList.add('btn-pause');
+        btnPause.classList.remove('btn-resume');
+      }
     }
 
     const total = ids.length;
@@ -102,7 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local') {
       chrome.storage.local.get(
-        ['rbx_auto_active', 'rbx_mode', 'rbx_index', 'rbx_ids', 'rbx_logs', 'rbx_audio_data', 'rbx_moderated_data'],
+        ['rbx_auto_active', 'rbx_paused', 'rbx_mode', 'rbx_index', 'rbx_ids', 'rbx_logs', 'rbx_audio_data', 'rbx_moderated_data'],
         (data) => {
           updateUIState(data);
         }
@@ -136,6 +157,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       rbx_ids: [],
       rbx_audio_data: [],
       rbx_moderated_data: [],
+      rbx_404_ids: [],
       rbx_logs: [`[AutoPerm] Memulai pemindaian ulang seluruh halaman untuk mode ${mode.toUpperCase()}...`]
     });
 
@@ -162,6 +184,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnStop.addEventListener('click', async () => {
     await chrome.storage.local.set({
       rbx_auto_active: false,
+      rbx_paused: false,
       rbx_needs_rescan: false
     });
     chrome.storage.local.get(['rbx_logs'], (data) => {
@@ -171,29 +194,66 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
+  btnPause.addEventListener('click', async () => {
+    chrome.storage.local.get(['rbx_paused', 'rbx_auto_active'], async (data) => {
+      if (!data.rbx_auto_active) return;
+      const isPaused = data.rbx_paused === true;
+      await chrome.storage.local.set({ rbx_paused: !isPaused });
+      chrome.storage.local.get(['rbx_logs'], (d) => {
+        const logs = d.rbx_logs || [];
+        logs.push(isPaused ? '[AutoPerm] ▶ DILANJUTKAN.' : '[AutoPerm] ⏸ DIJEDA.');
+        chrome.storage.local.set({ rbx_logs: logs });
+      });
+    });
+  });
+
   btnReset.addEventListener('click', async () => {
     await chrome.storage.local.set({
       rbx_auto_active: false,
+      rbx_paused: false,
       rbx_needs_rescan: false,
       rbx_mode: null,
       rbx_index: 0,
       rbx_ids: [],
       rbx_audio_data: [],
       rbx_moderated_data: [],
+      rbx_404_ids: [],
       rbx_logs: ['[AutoPerm] State telah di-reset.']
     });
   });
 
+  function normalizeItem(item) {
+    return {
+      soundId: String(item.soundId || item.sound_id || ""),
+      soundTitle: String(item.soundTitle || item.title || ""),
+      soundThumbnail: "",
+      moderated: Boolean(item.moderated),
+      moderationLevel: item.moderationLevel || null,
+      moderationReason: item.moderationReason || null
+    };
+  }
+
   function renderJsonModal() {
     chrome.storage.local.get(['rbx_audio_data', 'rbx_moderated_data'], (data) => {
-      const cleanData = data.rbx_audio_data || [];
-      const moderatedData = data.rbx_moderated_data || [];
+      const cleanData = (data.rbx_audio_data || []).map(normalizeItem);
+      const moderatedData = (data.rbx_moderated_data || []).map(normalizeItem);
+      const fatalData = moderatedData.filter(d => d.moderationLevel === 'FATAL');
+      const lowData = moderatedData.filter(d => d.moderationLevel === 'LOW');
 
       countClean.textContent = cleanData.length;
       countModerated.textContent = moderatedData.length;
 
+      const countFatalEl = document.getElementById('countFatal');
+      const countLowEl = document.getElementById('countLow');
+      if (countFatalEl) countFatalEl.textContent = fatalData.length;
+      if (countLowEl) countLowEl.textContent = lowData.length;
+
       if (activeJsonTab === 'clean') {
         jsonOutput.value = JSON.stringify(cleanData, null, 2);
+      } else if (activeJsonTab === 'fatal') {
+        jsonOutput.value = JSON.stringify(fatalData, null, 2);
+      } else if (activeJsonTab === 'low') {
+        jsonOutput.value = JSON.stringify(lowData, null, 2);
       } else {
         jsonOutput.value = JSON.stringify(moderatedData, null, 2);
       }
@@ -215,6 +275,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     activeJsonTab = 'moderated';
     renderJsonModal();
   });
+
+  const btnTabFatalJson = document.getElementById('btnTabFatalJson');
+  const btnTabLowJson = document.getElementById('btnTabLowJson');
+  if (btnTabFatalJson) {
+    btnTabFatalJson.addEventListener('click', () => {
+      activeJsonTab = 'fatal';
+      renderJsonModal();
+    });
+  }
+  if (btnTabLowJson) {
+    btnTabLowJson.addEventListener('click', () => {
+      activeJsonTab = 'low';
+      renderJsonModal();
+    });
+  }
 
   btnCloseModal.addEventListener('click', () => {
     jsonModal.classList.remove('open');

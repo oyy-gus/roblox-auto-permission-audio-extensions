@@ -27,6 +27,16 @@
     </div>
   </header>
 
+  <!-- Language Warning Banner -->
+  <div class="warning-banner">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+      <line x1="12" y1="9" x2="12" y2="13"></line>
+      <line x1="12" y1="17" x2="12.01" y2="17"></line>
+    </svg>
+    <span><strong>PENTING:</strong> Bahasa Roblox (Creator Hub) wajib disetel ke <strong>English</strong> agar ekstensi dapat membaca teks tombol & status.</span>
+  </div>
+
   <!-- Configuration Form -->
   <section class="card">
     <div class="card-title">
@@ -38,15 +48,15 @@
     </div>
 
     <div class="form-group">
-      <label for="inputUsernames">Usernames (Pisahkan dengan koma atau baris baru)</label>
-      <textarea id="inputUsernames" placeholder="Contoh: TBR SOCIETY, UserLain"></textarea>
-      <div class="help-text">Nama pengguna yang akan ditambahkan ke Collaborators</div>
+      <label for="inputUsernames">Usernames / Group Names (Pisahkan dengan koma atau baris baru)</label>
+      <textarea id="inputUsernames" placeholder="Contoh: NamaUser, NamaGroup"></textarea>
+      <div class="help-text">Nama pengguna atau grup yang akan ditambahkan ke Collaborators</div>
     </div>
 
     <div class="form-group">
-      <label for="inputUniverseId">Universe ID / Experience ID</label>
+      <label for="inputUniverseId">Universe ID</label>
       <input type="text" id="inputUniverseId" placeholder="Contoh: 1234567890">
-      <div class="help-text">ID Experience yang akan ditambahkan</div>
+      <div class="help-text">Universe ID yang akan ditambahkan ke Experiences</div>
     </div>
   </section>
 
@@ -68,9 +78,12 @@
       📦 Auto Archive Moderated Audio
     </button>
     <button id="btnStop" class="btn btn-danger">
-      ⛔ Stop
+      ⏹ Stop
     </button>
-    <button id="btnReset" class="btn btn-neutral">
+    <button id="btnPause" class="btn btn-pause">
+      ⏸ Jeda
+    </button>
+    <button id="btnReset" class="btn btn-neutral" style="grid-column: span 2;">
       🔄 Reset
     </button>
   </div>
@@ -104,12 +117,18 @@
         <h2>📋 Audio List JSON</h2>
         <button id="btnCloseModal" class="modal-close">&times;</button>
       </div>
-      <div style="display: flex; gap: 6px; margin-bottom: 8px;">
-        <button id="btnTabCleanJson" class="btn btn-secondary" style="flex:1; padding: 4px 8px; font-size: 11px;">
-          Lulus Moderasi (<span id="countClean">0</span>)
+      <div style="display: flex; gap: 5px; margin-bottom: 8px; flex-wrap: wrap;">
+        <button id="btnTabCleanJson" class="btn btn-secondary" style="flex:1; padding: 4px 6px; font-size: 10px;">
+          ✅ Lulus (<span id="countClean">0</span>)
         </button>
-        <button id="btnTabModeratedJson" class="btn btn-warning" style="flex:1; padding: 4px 8px; font-size: 11px;">
-          Terkena Moderasi (<span id="countModerated">0</span>)
+        <button id="btnTabModeratedJson" class="btn btn-warning" style="flex:1; padding: 4px 6px; font-size: 10px;">
+          ⚠ Semua (<span id="countModerated">0</span>)
+        </button>
+        <button id="btnTabFatalJson" class="btn btn-danger" style="flex:1; padding: 4px 6px; font-size: 10px;">
+          ⛔ Fatal (<span id="countFatal">0</span>)
+        </button>
+        <button id="btnTabLowJson" class="btn btn-neutral" style="flex:1; padding: 4px 6px; font-size: 10px;">
+          🔤 Low (<span id="countLow">0</span>)
         </button>
       </div>
       <div class="modal-body">
