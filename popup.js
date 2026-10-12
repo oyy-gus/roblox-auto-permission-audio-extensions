@@ -279,12 +279,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnScan.addEventListener('click', () => launchProcess('scan'));
   btnArchiveModerated.addEventListener('click', () => launchProcess('archive_moderated'));
 
+  async function broadcastTabMessage(message) {
+    try {
+      const tabs = await chrome.tabs.query({ url: '*://create.roblox.com/*' });
+      for (const t of tabs) {
+        chrome.tabs.sendMessage(t.id, message).catch(() => {});
+      }
+    } catch (e) {}
+  }
+
   btnStop.addEventListener('click', async () => {
     await chrome.storage.local.set({
       rbx_auto_active: false,
       rbx_paused: false,
       rbx_needs_rescan: false
     });
+    broadcastTabMessage({ action: 'stop' });
     chrome.storage.local.get(['rbx_logs'], (data) => {
       const logs = data.rbx_logs || [];
       logs.push('[AutoPerm] DIHENTIKAN OLEH PENGGUNA.');
@@ -296,10 +306,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.storage.local.get(['rbx_paused', 'rbx_auto_active'], async (data) => {
       if (!data.rbx_auto_active) return;
       const isPaused = data.rbx_paused === true;
-      await chrome.storage.local.set({ rbx_paused: !isPaused });
+      const nextPaused = !isPaused;
+      await chrome.storage.local.set({ rbx_paused: nextPaused });
+      broadcastTabMessage({ action: 'pause', paused: nextPaused });
       chrome.storage.local.get(['rbx_logs'], (d) => {
         const logs = d.rbx_logs || [];
-        logs.push(isPaused ? '[AutoPerm] ▶ DILANJUTKAN.' : '[AutoPerm] ⏸ DIJEDA.');
+        logs.push(nextPaused ? '[AutoPerm] ⏸ DIJEDA.' : '[AutoPerm] ▶ DILANJUTKAN.');
         chrome.storage.local.set({ rbx_logs: logs });
       });
     });
@@ -318,6 +330,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       rbx_404_ids: [],
       rbx_logs: ['[AutoPerm] State telah di-reset.']
     });
+    broadcastTabMessage({ action: 'stop' });
   });
 
   function normalizeItem(item) {

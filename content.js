@@ -1,4 +1,4 @@
-// Roblox Auto Permission - Content Script v10.7 (Maximal Button & Interaction Reliability)
+// Roblox Auto Permission - Content Script v10.8 (Instant Stop/Pause Response)
 
 (function () {
   'use strict';
@@ -6,19 +6,80 @@
   if (window.__RBX_AUTO_PERM_INJECTED__) return;
   window.__RBX_AUTO_PERM_INJECTED__ = true;
 
+  // ── In-memory state (synced instantly via storage listener & messages) ──
+  let _state = { active: false, paused: false };
+  let _isProcessing = false;
+
+  // Sync state from storage once at startup
+  chrome.storage.local.get(['rbx_auto_active', 'rbx_paused'], (d) => {
+    _state.active = d.rbx_auto_active === true;
+    _state.paused = d.rbx_paused === true;
+  });
+
+  // Keep _state in sync whenever popup changes stop/pause
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.rbx_auto_active !== undefined) {
+      _state.active = changes.rbx_auto_active.newValue === true;
+    }
+    if (changes.rbx_paused !== undefined) {
+      _state.paused = changes.rbx_paused.newValue === true;
+    }
+  });
+
+  // Immediate abort error class to instantly unwind async call stack
+  class ProcessAbortError extends Error {
+    constructor() {
+      super('Process aborted by user');
+      this.name = 'ProcessAbortError';
+    }
+  }
+
+  function checkAbort() {
+    if (!_state.active) {
+      throw new ProcessAbortError();
+    }
+  }
+
+  function isAbort(err) {
+    return err && (err instanceof ProcessAbortError || err.name === 'ProcessAbortError');
+  }
+
+  function shouldStop() {
+    return !_state.active;
+  }
+
+  // Plain wait (non-interruptible, use only for tiny micro-delays < 100ms)
   const wait = ms => new Promise(r => setTimeout(r, ms));
 
-  let hudElement = null;
-  let recentLogs = [];
-
-  // Pause Helper — waits in loop while rbx_paused is true
+  // Pause Helper — freezes execution in 100ms ticks while paused, throws immediately if stopped
   async function waitIfPaused() {
-    while (true) {
-      const data = await new Promise(resolve => chrome.storage.local.get(['rbx_paused', 'rbx_auto_active'], resolve));
-      if (!data.rbx_auto_active) return; // stopped
-      if (!data.rbx_paused) return;      // not paused
-      await wait(500); // poll every 500ms while paused
+    checkAbort();
+    while (_state.paused && _state.active) {
+      await wait(100);
     }
+    checkAbort();
+  }
+
+  // Interruptible wait — checks stop & pause every 100ms. Throws ProcessAbortError if stopped.
+  async function iWait(ms) {
+    checkAbort();
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      checkAbort();
+      const slice = Math.min(100, end - Date.now());
+      if (slice > 0) await wait(slice);
+      while (_state.paused && _state.active) {
+        await wait(100);
+      }
+      checkAbort();
+    }
+  }
+
+  // Safe navigation — NEVER navigates if process is stopped
+  function navigateTo(url) {
+    checkAbort();
+    log(`Navigasi ke: ${url}`);
+    window.location.href = url;
   }
 
   // Log Helper
@@ -118,7 +179,7 @@
     while (Date.now() - start < timeout) {
       const el = root.querySelector(selector);
       if (el) return el;
-      await wait(200);
+      await iWait(200);
     }
     return null;
   }
@@ -160,9 +221,9 @@
     if (!input) return false;
     input.scrollIntoView({ block: 'center' });
     simulateClick(input);
-    await wait(200);
+    await iWait(200);
     input.focus();
-    await wait(150);
+    await iWait(150);
 
     // Method 1: execCommand (most reliable, bypasses React synthetic event quirks)
     const execOk = await execCommandInsert(input, text);
@@ -174,15 +235,15 @@
     // Method 2: setNativeValue + char-by-char typing
     log(`[fillInput] execCommand gagal, coba char-by-char...`);
     setNativeValue(input, '');
-    await wait(150);
+    await iWait(150);
     for (const char of text) {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true, cancelable: true, composed: true }));
       input.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true, cancelable: true, composed: true }));
       setNativeValue(input, input.value + char);
       input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true, cancelable: true, composed: true }));
-      await wait(80 + Math.random() * 40);
+      await iWait(80 + Math.random() * 40);
     }
-    await wait(200);
+    await iWait(200);
 
     // Method 3: If still empty, force via ClipboardEvent paste simulation
     if (!input.value) {
@@ -192,7 +253,7 @@
       dt.setData('text/plain', text);
       input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
       setNativeValue(input, text);
-      await wait(200);
+      await iWait(200);
     }
 
     log(`[fillInput] Hasil akhir value: "${input.value}"`);
@@ -206,7 +267,7 @@
   async function retry(fn, attempts = 4, delay = 1000) {
     for (let i = 0; i < attempts; i++) {
       if (await fn()) return true;
-      await wait(delay);
+      await iWait(delay);
     }
     return false;
   }
@@ -449,10 +510,10 @@
       log("Kembali ke Halaman Pertama (First Page)...");
       while (prevBtn && !isButtonDisabled(prevBtn)) {
         simulateClick(prevBtn);
-        await wait(1500);
+        await iWait(1500);
         prevBtn = document.querySelector(selectors[0]) || document.querySelector(selectors[1]) || document.querySelector(selectors[2]);
       }
-      await wait(1000);
+      await iWait(1000);
       await waitForElement('table tbody tr', 10000);
     }
   }
@@ -461,7 +522,7 @@
   async function scanAllPages(mode) {
     log("=== MEMULAI PEMINDAIAN SELURUH HALAMAN AUDIO ===");
     await waitForElement('table, [role="table"]', 15000);
-    await wait(1000);
+    await iWait(1000);
 
     // Reset to page 1 first if on another page
     await resetToFirstPage();
@@ -496,9 +557,9 @@
       log(`Pindah ke Halaman ${page + 1}...`);
       simulateClick(nextBtn);
       page++;
-      await wait(2500);
+      await iWait(2500);
       await waitForElement('table tbody tr, [role="row"]', 10000);
-      await wait(800);
+      await iWait(800);
     }
 
     const fatalCount = allModerated.filter(d => d.moderationLevel === 'FATAL').length;
@@ -530,13 +591,13 @@
 
     if (targetIds.length > 0) {
       log(`Mulai proses ${targetIds.length} lagu [mode: ${mode}]...`);
-      await wait(1000);
+      await iWait(1000);
       if (mode === 'archive_moderated') {
         await processArchiveModerated(allModerated);
       } else {
         const settings = await new Promise(resolve => chrome.storage.local.get(['rbx_include_thumb', 'rbx_thumb_data'], resolve));
         const firstPage = (mode === 'thumbnail' || (settings.rbx_include_thumb && settings.rbx_thumb_data)) ? 'configure' : 'permissions';
-        window.location.href = `https://create.roblox.com/dashboard/creations/store/${targetIds[0]}/${firstPage}`;
+        navigateTo(`https://create.roblox.com/dashboard/creations/store/${targetIds[0]}/${firstPage}`);
       }
     } else {
       await chrome.storage.local.set({ rbx_auto_active: false });
@@ -547,9 +608,12 @@
 
   // Navigate to Next Track Helper
   async function goToNextTrack(currentIndex, ids) {
+    checkAbort();
+    await waitIfPaused();
     const nextIndex = currentIndex + 1;
     await chrome.storage.local.set({ rbx_index: nextIndex });
-    await wait(600);
+    await iWait(600);
+    checkAbort();
 
     if (nextIndex < ids.length) {
       const nextId = ids[nextIndex];
@@ -557,7 +621,7 @@
       const mode = settings.rbx_mode || 'both';
       const targetPage = (mode === 'thumbnail' || (settings.rbx_include_thumb && settings.rbx_thumb_data)) ? 'configure' : 'permissions';
       log(`[${nextIndex + 1}/${ids.length}] Otomatis berpindah ke lagu selanjutnya (ID: ${nextId})...`);
-      window.location.href = `https://create.roblox.com/dashboard/creations/store/${nextId}/${targetPage}`;
+      navigateTo(`https://create.roblox.com/dashboard/creations/store/${nextId}/${targetPage}`);
     } else {
       await chrome.storage.local.set({ rbx_auto_active: false });
       log(`============================`);
@@ -647,7 +711,7 @@
       lastCell.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       lastCell.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
 
-      await wait(400);
+      await iWait(400);
 
       // Find 3-dots button by icon class
       let moreBtn = lastCell.querySelector('button .icon-filled-three-dots-vertical')?.closest('button') ||
@@ -679,7 +743,7 @@
       moreBtn.style.visibility = 'visible';
       moreBtn.style.opacity = '1';
       simulateClick(moreBtn);
-      await wait(1200);
+      await iWait(1200);
 
       let archiveMenuItem = null;
       const menuSearchRoots = [
@@ -716,7 +780,7 @@
       if (archiveMenuItem) {
         log(`Mengeklik menu "Archive" untuk ID ${soundId}...`);
         simulateClick(archiveMenuItem);
-        await wait(1200);
+        await iWait(1200);
 
         const confirmSelectors = [
           '[role="dialog"] button',
@@ -732,7 +796,7 @@
             if (btnText === 'Archive' || btnText.toLowerCase().includes('archive')) {
               simulateClick(btn);
               log(`✔ Konfirmasi Archive diklik (ID: ${soundId})`);
-              await wait(1200);
+              await iWait(1200);
               return true;
             }
           }
@@ -743,7 +807,7 @@
       } else {
         log(`⚠️ Menu "Archive" tidak ditemukan setelah klik 3-dots (ID: ${soundId})`);
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-        await wait(300);
+        await iWait(300);
         return false;
       }
     }
@@ -771,7 +835,7 @@
       } else {
         log(`⚠️ Gagal diarsip untuk ID: ${trackId}`);
       }
-      await wait(1200);
+      await iWait(1200);
     }
     await chrome.storage.local.set({ rbx_auto_active: false });
     log("Proses Arsip Audio Moderasi Selesai ✔");
@@ -809,17 +873,17 @@
 
   async function waitDialogClose() {
     for (let i = 0; i < 8; i++) {
-      await wait(250);
+      await iWait(250);
       const openDialog = document.querySelector('[data-testid="add-collaborators-modal"], [data-testid="add-experiences-modal"], [role="dialog"]');
       if (!openDialog) return true;
     }
     closeModalDialog('Done');
-    await wait(300);
+    await iWait(300);
     return true;
   }
 
   async function clickSaveChanges() {
-    await wait(300);
+    await iWait(300);
     for (const btn of document.querySelectorAll('button')) {
       const text = (btn.textContent?.trim() || '').toLowerCase();
       if (text.includes('save changes') || text.includes('simpan perubahan') || text === 'save' || text === 'simpan') {
@@ -829,7 +893,7 @@
         }
         simulateClick(btn);
         log(`Tombol "${btn.textContent?.trim()}" diklik ✔`);
-        await wait(1500);
+        await iWait(1500);
         return true;
       }
     }
@@ -868,7 +932,7 @@
       return false;
     }
 
-    await wait(1200);
+    await iWait(1200);
 
     // Look for file input in DOM
     let fileInput = document.querySelector('input[type="file"]');
@@ -881,7 +945,7 @@
 
       for (const btn of uploadBtns) {
         simulateClick(btn);
-        await wait(600);
+        await iWait(600);
         fileInput = document.querySelector('input[type="file"]');
         if (fileInput) break;
       }
@@ -901,11 +965,11 @@
       fileInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       fileInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
-      await wait(1500);
+      await iWait(1500);
 
       log(`Menyimpan perubahan thumbnail...`);
       await clickSaveChanges();
-      await wait(1500);
+      await iWait(1500);
       log(`✔ Thumbnail berhasil diperbarui (ID: ${soundId})`);
       return true;
     } catch (err) {
@@ -919,7 +983,7 @@
     return await retry(async () => {
       const tab = document.querySelector('button#Collaborators[role="tab"]') ||
                   Array.from(document.querySelectorAll('button[role="tab"]')).find(b => b.textContent.includes('Collaborators'));
-      if (tab) { simulateClick(tab); await wait(1000); return true; }
+      if (tab) { simulateClick(tab); await iWait(1000); return true; }
       return false;
     });
   }
@@ -930,7 +994,7 @@
         const text = btn.textContent?.trim() || '';
         if (text.includes('Add collaborators') || text.includes('+ Add collaborators')) {
           simulateClick(btn);
-          await wait(1000);
+          await iWait(1000);
           return true;
         }
       }
@@ -954,7 +1018,7 @@
         '[role="listbox"] [role="option"], [role="option"], .MuiAutocomplete-option, [data-testid="autocomplete-option"], .foundation-web-menu-item'
       );
       if (opts.length > 0) return opts;
-      await wait(250);
+      await iWait(250);
     }
     return null;
   }
@@ -966,7 +1030,7 @@
     for (const opt of opts) {
       if (opt.textContent?.toLowerCase().includes(username.toLowerCase())) {
         simulateClick(opt);
-        await wait(500);
+        await iWait(500);
         return true;
       }
     }
@@ -976,10 +1040,10 @@
   async function processCollaborators(usernames) {
     log("── [COLLABORATORS] ──");
     await waitForElement('button#Collaborators[role="tab"], button[role="tab"]', 15000);
-    await wait(600);
+    await iWait(600);
 
     await switchToCollaboratorsTab();
-    await wait(600);
+    await iWait(600);
 
     const missingUsernames = usernames.filter(u => !alreadyExists(u));
 
@@ -1016,7 +1080,7 @@
 
       const filled = await fillInput(input, username);
       if (!filled) { log(`Gagal mengisi input untuk ${username}`); continue; }
-      await wait(600);
+      await iWait(600);
 
       const opts = await waitDropdown(6000);
       if (!opts || opts.length === 0) {
@@ -1034,14 +1098,14 @@
 
       log(`${username} berhasil dipilih ✔`);
       addedCount++;
-      await wait(500);
+      await iWait(500);
     }
 
     closeModalDialog('Done');
     await waitDialogClose();
-    await wait(500);
+    await iWait(500);
     await clickSaveChanges();
-    await wait(800);
+    await iWait(800);
     log(`Collaborators selesai (${addedCount} ditambahkan) ✔`);
     return true;
   }
@@ -1051,7 +1115,7 @@
     return await retry(async () => {
       const tab = document.querySelector('button#Experiences[role="tab"]') ||
                   Array.from(document.querySelectorAll('button[role="tab"]')).find(b => b.textContent.includes('Experiences'));
-      if (tab) { simulateClick(tab); await wait(1000); return true; }
+      if (tab) { simulateClick(tab); await iWait(1000); return true; }
       return false;
     });
   }
@@ -1061,7 +1125,7 @@
       for (const btn of document.querySelectorAll('button')) {
         const text = btn.textContent?.trim() || '';
         if (text.includes('Add experiences')) {
-          simulateClick(btn); await wait(1200); return true;
+          simulateClick(btn); await iWait(1200); return true;
         }
       }
       return false;
@@ -1075,7 +1139,7 @@
     }
     log("── [EXPERIENCES] ──");
     await switchToExperiencesTab();
-    await wait(800);
+    await iWait(800);
 
     // NOTE: We do NOT check alreadyExistsExperience() here.
     // Roblox hides added experiences from the UI, so we always attempt to add.
@@ -1084,14 +1148,14 @@
 
     // Wait for dialog to appear
     await waitForElement('[role="dialog"], [data-testid*="modal"]', 10000);
-    await wait(600);
+    await iWait(600);
     log("Dialog Experiences terbuka ✔");
 
     // Find input: placeholder is "Enter experience IDs"
     let input = findDialogInput(['experience', 'Enter experience', 'experience IDs']);
     if (!input) {
       // wait a bit more and retry
-      await wait(800);
+      await iWait(800);
       input = findDialogInput(['experience', 'Enter', 'IDs']);
     }
     if (!input) {
@@ -1103,7 +1167,7 @@
     // Fill the input
     const filled = await fillInput(input, String(universeId));
     log(`Universe ID ${filled ? 'berhasil' : 'GAGAL'} dimasukkan: "${input.value}"`);
-    await wait(800);
+    await iWait(800);
 
     // Find the Add button — in Experiences dialog it is a sibling button next to the input (not inside dialog subtree always)
     log("Menunggu tombol Add aktif...");
@@ -1126,7 +1190,7 @@
         if (addBtn) break;
       }
       if (addBtn) break;
-      await wait(300);
+      await iWait(300);
     }
 
     if (addBtn) {
@@ -1137,14 +1201,14 @@
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
       input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
     }
-    await wait(1000);
+    await iWait(1000);
 
     closeModalDialog('Done');
-    await wait(800);
+    await iWait(800);
     await waitDialogClose();
-    await wait(600);
+    await iWait(600);
     await clickSaveChanges();
-    await wait(800);
+    await iWait(800);
     log("Experiences selesai ✔");
   }
 
@@ -1158,103 +1222,87 @@
       await processExperiences(universeId);
     } else {
       await processCollaborators(usernames);
-      await wait(600);
+      await iWait(600);
       await processExperiences(universeId);
     }
   }
 
   // Main Asset Loop Controller
   async function processAssetsLoop() {
-    chrome.storage.local.get(
-      [
-        'rbx_auto_active', 'rbx_needs_rescan', 'rbx_ids', 'rbx_audio_data', 'rbx_moderated_data',
-        'rbx_mode', 'rbx_index', 'usernames', 'universeId', 'rbx_thumb_data', 'rbx_thumb_name', 'rbx_include_thumb'
-      ],
-      async (data) => {
-        if (data.rbx_auto_active !== true) return;
+    if (_isProcessing) return;
+    _isProcessing = true;
 
-        const ids = data.rbx_ids || [];
-        const allData = data.rbx_audio_data || [];
-        const mode = data.rbx_mode || 'both';
-        let index = parseInt(data.rbx_index || 0, 10);
-        const needsRescan = data.rbx_needs_rescan === true;
+    try {
+      const data = await new Promise(resolve =>
+        chrome.storage.local.get(
+          [
+            'rbx_auto_active', 'rbx_paused', 'rbx_needs_rescan', 'rbx_ids', 'rbx_audio_data', 'rbx_moderated_data',
+            'rbx_mode', 'rbx_index', 'usernames', 'universeId', 'rbx_thumb_data', 'rbx_thumb_name', 'rbx_include_thumb'
+          ],
+          resolve
+        )
+      );
 
-        if (mode === 'archive_moderated') {
-          if (window.location.href.includes('/creations')) {
-            await scanAllPages(mode);
-          } else {
-            window.location.href = 'https://create.roblox.com/dashboard/creations?activeTab=Audio';
-          }
-          return;
+      if (data.rbx_auto_active !== true) {
+        _state.active = false;
+        return;
+      }
+      _state.active = true;
+      _state.paused = data.rbx_paused === true;
+
+      checkAbort();
+      await waitIfPaused();
+
+      const ids = data.rbx_ids || [];
+      const allData = data.rbx_audio_data || [];
+      const mode = data.rbx_mode || 'both';
+      let index = parseInt(data.rbx_index || 0, 10);
+      const needsRescan = data.rbx_needs_rescan === true;
+
+      if (mode === 'archive_moderated') {
+        if (window.location.href.includes('/creations')) {
+          await scanAllPages(mode);
+        } else {
+          navigateTo('https://create.roblox.com/dashboard/creations?activeTab=Audio');
         }
+        return;
+      }
 
-        // ALWAYS force full rescan of all pages if fresh start or rbx_needs_rescan flag is active
-        if (needsRescan || ids.length === 0) {
-          if (window.location.href.includes('/creations')) {
-            await scanAllPages(mode);
-          } else {
-            log("Mengarahkan ke halaman Audio Creations untuk memindai SEMUA halaman ID...");
-            window.location.href = 'https://create.roblox.com/dashboard/creations?activeTab=Audio';
-          }
-          return;
+      // ALWAYS force full rescan of all pages if fresh start or rbx_needs_rescan flag is active
+      if (needsRescan || ids.length === 0) {
+        if (window.location.href.includes('/creations')) {
+          await scanAllPages(mode);
+        } else {
+          log("Mengarahkan ke halaman Audio Creations untuk memindai SEMUA halaman ID...");
+          navigateTo('https://create.roblox.com/dashboard/creations?activeTab=Audio');
         }
+        return;
+      }
 
-        if (index >= ids.length) {
-          log(`============================`);
-          log(`SEMUA SELESAI! Total: ${ids.length} lagu [mode: ${mode}]`);
-          log(`============================`);
+      if (index >= ids.length) {
+        log(`============================`);
+        log(`SEMUA SELESAI! Total: ${ids.length} lagu [mode: ${mode}]`);
+        log(`============================`);
 
-          await chrome.storage.local.set({
-            rbx_auto_active: false,
-            rbx_index: ids.length
-          });
+        await chrome.storage.local.set({
+          rbx_auto_active: false,
+          rbx_index: ids.length
+        });
 
-          alert(`SEMUA SELESAI ✔\nTotal: ${ids.length} lagu\nMode: ${mode}\nBuka Extension Popup untuk melihat JSON.`);
-          return;
-        }
+        alert(`SEMUA SELESAI ✔\nTotal: ${ids.length} lagu\nMode: ${mode}\nBuka Extension Popup untuk melihat JSON.`);
+        return;
+      }
 
-        const id = ids[index];
-        const storeMatch = window.location.href.match(/store\/(\d+)\/(permissions|configure)/);
-        const currentId = storeMatch ? storeMatch[1] : null;
-        const pageType = storeMatch ? storeMatch[2] : null;
+      const id = ids[index];
+      const storeMatch = window.location.href.match(/store\/(\d+)\/(permissions|configure)/);
+      const currentId = storeMatch ? storeMatch[1] : null;
+      const pageType = storeMatch ? storeMatch[2] : null;
 
-        const shouldConfigureFirst = (mode === 'thumbnail' || (data.rbx_include_thumb && data.rbx_thumb_data));
-        const targetPage = shouldConfigureFirst ? 'configure' : 'permissions';
+      const shouldConfigureFirst = (mode === 'thumbnail' || (data.rbx_include_thumb && data.rbx_thumb_data));
+      const targetPage = shouldConfigureFirst ? 'configure' : 'permissions';
 
-        if (currentId !== id) {
-          // Before navigating, check if we're currently on a 404 page
-          // (Roblox sometimes redirects 404 URLs to dashboard/other pages)
-          if (is404Page()) {
-            const retryKey = `rbx_retry_${id}`;
-            const retryData = await new Promise(resolve => chrome.storage.local.get([retryKey], resolve));
-            const retryCount = retryData[retryKey] || 0;
-            const MAX_RETRY = 3;
-
-            if (retryCount < MAX_RETRY) {
-              await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
-              log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Membuka ulang halaman ID: ${id} dalam 3 detik...`);
-              await wait(3000);
-              window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`;
-            } else {
-              await chrome.storage.local.set({ [retryKey]: 0 });
-              const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
-              log(`🚧 [404] SKIP permanen setelah ${MAX_RETRY}x retry: "${songName404}" (ID: ${id})`);
-              const skippedList = data.rbx_404_ids || [];
-              if (!skippedList.includes(id)) {
-                skippedList.push(id);
-                await chrome.storage.local.set({ rbx_404_ids: skippedList });
-              }
-              await goToNextTrack(index, ids);
-            }
-            return;
-          }
-          log(`[${index + 1}/${ids.length}] Navigasi ke ID: ${id} (${targetPage})`);
-          window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`;
-          return;
-        }
-
-        // ── 404 CHECK: after landing on the page ──
-        await wait(800);
+      if (currentId !== id) {
+        // Before navigating, check if we're currently on a 404 page
         if (is404Page()) {
           const retryKey = `rbx_retry_${id}`;
           const retryData = await new Promise(resolve => chrome.storage.local.get([retryKey], resolve));
@@ -1263,9 +1311,9 @@
 
           if (retryCount < MAX_RETRY) {
             await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
-            log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Reload halaman ID: ${id} dalam 3 detik...`);
-            await wait(3000);
-            window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`;
+            log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Membuka ulang halaman ID: ${id} dalam 3 detik...`);
+            await iWait(3000);
+            navigateTo(`https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`);
           } else {
             await chrome.storage.local.set({ [retryKey]: 0 });
             const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
@@ -1279,74 +1327,115 @@
           }
           return;
         }
+        log(`[${index + 1}/${ids.length}] Navigasi ke ID: ${id} (${targetPage})`);
+        navigateTo(`https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`);
+        return;
+      }
 
-        if (pageType === 'configure') {
-          await wait(600);
-          const modInfo = getAudioModerationInfo();
-          if (modInfo.isModerated) {
-            const modLevel = modInfo.isRenameNeeded ? 'LOW' : 'FATAL';
-            if (modLevel === 'LOW') {
-              log(`⚠️ [LOW] SKIP: Lagu (ID: ${id}) PERLU DIGANTI NAMA! (Judul Ter-moderasi / #####)`);
-            } else {
-              log(`⛔ [FATAL] SKIP: Lagu (ID: ${id}) DIBLOKIR SISTEM ROBLOX! (${modInfo.reason})`);
-            }
-            const moderatedList = data.rbx_moderated_data || [];
-            if (!moderatedList.some(m => m.soundId === id)) {
-              const songTitle = allData[index]?.soundTitle || allData[index]?.title || id;
-              moderatedList.push({ soundId: id, soundTitle: songTitle, soundThumbnail: "", moderated: true, moderationLevel: modLevel, moderationReason: modInfo.reason });
-              await chrome.storage.local.set({ rbx_moderated_data: moderatedList });
-            }
-            await goToNextTrack(index, ids);
-            return;
+      // ── 404 CHECK: after landing on the page ──
+      await iWait(800);
+      if (is404Page()) {
+        const retryKey = `rbx_retry_${id}`;
+        const retryData = await new Promise(resolve => chrome.storage.local.get([retryKey], resolve));
+        const retryCount = retryData[retryKey] || 0;
+        const MAX_RETRY = 3;
+
+        if (retryCount < MAX_RETRY) {
+          await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
+          log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Reload halaman ID: ${id} dalam 3 detik...`);
+          await iWait(3000);
+          navigateTo(`https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`);
+        } else {
+          await chrome.storage.local.set({ [retryKey]: 0 });
+          const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
+          log(`🚧 [404] SKIP permanen setelah ${MAX_RETRY}x retry: "${songName404}" (ID: ${id})`);
+          const skippedList = data.rbx_404_ids || [];
+          if (!skippedList.includes(id)) {
+            skippedList.push(id);
+            await chrome.storage.local.set({ rbx_404_ids: skippedList });
           }
-
-          const songName = allData[index]?.soundTitle || allData[index]?.title || id;
-          updateHUDInfo(songName, id, index + 1, ids.length, mode);
-
-          if (data.rbx_thumb_data) {
-            await uploadAudioThumbnail(id, data.rbx_thumb_data, data.rbx_thumb_name);
-          }
-
-          if (mode === 'thumbnail') {
-            await goToNextTrack(index, ids);
-            return;
-          }
-
-          log(`Thumbnail selesai, pindah ke Permissions tab (ID: ${id})...`);
-          window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
-          return;
+          await goToNextTrack(index, ids);
         }
+        return;
+      }
 
-        const songName = allData[index]?.soundTitle || allData[index]?.title || id;
-        log(`============================`);
-        log(`[${index + 1}/${ids.length}] ${songName}`);
-        log(`ID: ${id} | Mode: ${mode}`);
-        log(`============================`);
-
-        updateHUDInfo(songName, id, index + 1, ids.length, mode);
-
-        await wait(600);
+      if (pageType === 'configure') {
+        await iWait(600);
+        checkAbort();
         const modInfo = getAudioModerationInfo();
         if (modInfo.isModerated) {
           const modLevel = modInfo.isRenameNeeded ? 'LOW' : 'FATAL';
           if (modLevel === 'LOW') {
-            log(`⚠️ [LOW] SKIP: Lagu "${songName}" (ID: ${id}) PERLU DIGANTI NAMA! (##### ter-moderasi)`);
+            log(`⚠️ [LOW] SKIP: Lagu (ID: ${id}) PERLU DIGANTI NAMA! (Judul Ter-moderasi / #####)`);
           } else {
-            log(`⛔ [FATAL] SKIP: Lagu "${songName}" (ID: ${id}) DIBLOKIR SISTEM ROBLOX!`);
+            log(`⛔ [FATAL] SKIP: Lagu (ID: ${id}) DIBLOKIR SISTEM ROBLOX! (${modInfo.reason})`);
           }
           const moderatedList = data.rbx_moderated_data || [];
           if (!moderatedList.some(m => m.soundId === id)) {
-            moderatedList.push({ soundId: id, soundTitle: songName, soundThumbnail: "", moderated: true, moderationLevel: modLevel, moderationReason: modInfo.reason });
+            const songTitle = allData[index]?.soundTitle || allData[index]?.title || id;
+            moderatedList.push({ soundId: id, soundTitle: songTitle, soundThumbnail: "", moderated: true, moderationLevel: modLevel, moderationReason: modInfo.reason });
             await chrome.storage.local.set({ rbx_moderated_data: moderatedList });
           }
           await goToNextTrack(index, ids);
           return;
         }
 
-        await processOneAsset(mode, data);
-        await goToNextTrack(index, ids);
+        const songName = allData[index]?.soundTitle || allData[index]?.title || id;
+        updateHUDInfo(songName, id, index + 1, ids.length, mode);
+
+        if (data.rbx_thumb_data) {
+          await uploadAudioThumbnail(id, data.rbx_thumb_data, data.rbx_thumb_name);
+        }
+
+        if (mode === 'thumbnail') {
+          await goToNextTrack(index, ids);
+          return;
+        }
+
+        log(`Thumbnail selesai, pindah ke Permissions tab (ID: ${id})...`);
+        navigateTo(`https://create.roblox.com/dashboard/creations/store/${id}/permissions`);
+        return;
       }
-    );
+
+      const songName = allData[index]?.soundTitle || allData[index]?.title || id;
+      log(`============================`);
+      log(`[${index + 1}/${ids.length}] ${songName}`);
+      log(`ID: ${id} | Mode: ${mode}`);
+      log(`============================`);
+
+      updateHUDInfo(songName, id, index + 1, ids.length, mode);
+
+      await iWait(600);
+      checkAbort();
+      const modInfo = getAudioModerationInfo();
+      if (modInfo.isModerated) {
+        const modLevel = modInfo.isRenameNeeded ? 'LOW' : 'FATAL';
+        if (modLevel === 'LOW') {
+          log(`⚠️ [LOW] SKIP: Lagu "${songName}" (ID: ${id}) PERLU DIGANTI NAMA! (##### ter-moderasi)`);
+        } else {
+          log(`⛔ [FATAL] SKIP: Lagu "${songName}" (ID: ${id}) DIBLOKIR SISTEM ROBLOX!`);
+        }
+        const moderatedList = data.rbx_moderated_data || [];
+        if (!moderatedList.some(m => m.soundId === id)) {
+          moderatedList.push({ soundId: id, soundTitle: songName, soundThumbnail: "", moderated: true, moderationLevel: modLevel, moderationReason: modInfo.reason });
+          await chrome.storage.local.set({ rbx_moderated_data: moderatedList });
+        }
+        await goToNextTrack(index, ids);
+        return;
+      }
+
+      await processOneAsset(mode, data);
+      checkAbort();
+      await goToNextTrack(index, ids);
+    } catch (err) {
+      if (isAbort(err)) {
+        log("⏹ Proses dihentikan seketika.");
+        return;
+      }
+      console.error("[AutoPerm Error]", err);
+    } finally {
+      _isProcessing = false;
+    }
   }
 
   // Floating HUD Controller Widget
@@ -1394,19 +1483,23 @@
     });
 
     document.getElementById('hudPauseBtn').addEventListener('click', () => {
-      chrome.storage.local.get(['rbx_paused'], (data) => {
-        const isPaused = data.rbx_paused === true;
-        chrome.storage.local.set({ rbx_paused: !isPaused });
-        log(isPaused ? '▶ DILANJUTKAN via HUD' : '⏸ DIJEDA via HUD');
-      });
+      _state.paused = !_state.paused;
+      chrome.storage.local.set({ rbx_paused: _state.paused });
+      log(_state.paused ? '⏸ DIJEDA via HUD' : '▶ DILANJUTKAN via HUD');
+      syncHUDState({ rbx_auto_active: _state.active, rbx_paused: _state.paused });
     });
 
     document.getElementById('hudStopBtn').addEventListener('click', () => {
+      _state.active = false;
+      _state.paused = false;
       chrome.storage.local.set({ rbx_auto_active: false, rbx_paused: false, rbx_needs_rescan: false });
       log("⏹ DIHENTIKAN via HUD");
+      syncHUDState({ rbx_auto_active: false, rbx_paused: false });
     });
 
     document.getElementById('hudResetBtn').addEventListener('click', () => {
+      _state.active = false;
+      _state.paused = false;
       chrome.storage.local.set({
         rbx_auto_active: false,
         rbx_paused: false,
@@ -1418,6 +1511,7 @@
         rbx_logs: []
       });
       log("🔄 State di-reset via HUD");
+      syncHUDState({ rbx_auto_active: false, rbx_paused: false, rbx_index: 0 });
     });
 
     makeDraggable(hudElement, document.getElementById('hudHeader'));
@@ -1541,9 +1635,23 @@
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'start') {
       log(`Perintah START diterima (${request.mode})`);
+      _state.active = true;
+      _state.paused = false;
       processAssetsLoop();
       sendResponse({ status: 'started' });
+    } else if (request.action === 'stop') {
+      _state.active = false;
+      _state.paused = false;
+      log("⏹ Perintah STOP diterima via pesan");
+      syncHUDState({ rbx_auto_active: false, rbx_paused: false });
+      sendResponse({ status: 'stopped' });
+    } else if (request.action === 'pause') {
+      _state.paused = request.paused === true;
+      log(_state.paused ? "⏸ Perintah PAUSE diterima via pesan" : "▶ Perintah RESUME diterima via pesan");
+      syncHUDState({ rbx_auto_active: _state.active, rbx_paused: _state.paused });
+      sendResponse({ status: 'paused', paused: _state.paused });
     }
+    return true;
   });
 
   setTimeout(() => {
