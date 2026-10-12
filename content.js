@@ -73,7 +73,7 @@
     return true;
   }
 
-  // Native Value Setter for React 16+ Controlled Inputs
+  // Native Value Setter for React 16/17/18+ Controlled Inputs
   function setNativeValue(el, value) {
     if (!el) return;
     const previousValue = el.value;
@@ -89,6 +89,8 @@
     if (el._valueTracker) {
       el._valueTracker.setValue(previousValue);
     }
+    // React 17+ needs InputEvent with inputType to trigger onChange
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: value }));
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
@@ -105,16 +107,21 @@
   }
 
   async function typeUsername(input, text) {
+    try { input.focus(); } catch(e) {}
     simulateClick(input);
-    await wait(200);
+    await wait(300);
+    // Clear existing value
     setNativeValue(input, '');
-    await wait(150);
+    await wait(200);
+    // Type char by char to trigger React onChange on every keystroke
     for (const char of text) {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true, cancelable: true }));
       setNativeValue(input, input.value + char);
-      input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true }));
-      await wait(60 + Math.random() * 40);
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true, cancelable: true }));
+      await wait(70 + Math.random() * 50);
     }
+    await wait(150);
   }
 
   async function retry(fn, attempts = 4, delay = 1000) {
@@ -995,7 +1002,7 @@
     }
     log("── [EXPERIENCES] ──");
     await switchToExperiencesTab();
-    await wait(600);
+    await wait(800);
 
     if (alreadyExistsExperience(universeId)) {
       log(`⚡ INSTANT SKIP: Universe ID (${universeId}) SUDAH ADA pada lagu ini ✔`);
@@ -1008,34 +1015,46 @@
     const dialog = await waitForElement('[data-testid="add-experiences-modal"], [role="dialog"]', 10000);
     if (!dialog) { log("Dialog Experiences tidak muncul"); return; }
     log("Dialog Experiences terbuka ✔");
+    await wait(500);
 
-    const input = await waitForElement('#proposed-experience-search, input[placeholder*="search"], input[type="text"], input', 8000, dialog);
+    // Find the universe ID input with broader selectors
+    const input = await waitForElement(
+      '#proposed-experience-search, input[placeholder*="Universe"], input[placeholder*="universe"], input[placeholder*="search"], input[placeholder*="Search"], input[type="text"], input',
+      8000, dialog
+    );
     if (!input) { log("Input experience tidak ditemukan"); return; }
 
-    simulateClick(input);
-    setNativeValue(input, universeId);
+    log(`Memasukkan Universe ID char-by-char: ${universeId}`);
+    // Use typeUsername (char-by-char) so React controlled input fires onChange on every keystroke
+    await typeUsername(input, String(universeId));
     log(`Universe ID dimasukkan: ${universeId}`);
-    await wait(600);
 
-    log("Menunggu tombol Add...");
+    // Wait longer for the Add button to become enabled after input
+    log("Menunggu tombol Add aktif...");
     let addBtn = null;
     const addStart = Date.now();
-    while (Date.now() - addStart < 6000) {
+    while (Date.now() - addStart < 8000) {
       for (const btn of dialog.querySelectorAll('button')) {
-        const text = btn.textContent?.trim() || '';
-        if (text === 'Add' && !isButtonDisabled(btn)) { addBtn = btn; break; }
+        const text = (btn.textContent?.trim() || '');
+        if ((text === 'Add' || text.toLowerCase() === 'add') && !isButtonDisabled(btn)) {
+          addBtn = btn;
+          break;
+        }
       }
       if (addBtn) break;
-      await wait(250);
+      await wait(300);
     }
 
     if (addBtn) {
       simulateClick(addBtn);
       log("Tombol Add diklik ✔");
     } else {
-      log("Tombol Add tidak aktif / tidak ditemukan");
+      log("⚠️ Tombol Add tidak aktif / tidak ditemukan — coba klik Add dengan Enter");
+      // Fallback: press Enter on the input
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true, cancelable: true }));
     }
-    await wait(800);
+    await wait(1000);
 
     closeModalDialog('Done');
     await wait(800);
