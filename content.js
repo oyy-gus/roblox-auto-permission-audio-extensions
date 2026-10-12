@@ -231,18 +231,9 @@
   }
 
   function alreadyExistsExperience(universeId) {
-    if (!universeId) return false;
-    const cleanId = String(universeId).trim();
-    if (!cleanId) return false;
-
-    const bodyText = (document.body ? document.body.innerText : '');
-    if (bodyText.includes(cleanId)) return true;
-
-    const cells = document.querySelectorAll('#Experiences td, #Experiences [role="cell"], [data-testid="experiences-permission-tab"] *');
-    for (const cell of cells) {
-      if (cell.textContent.includes(cleanId)) return true;
-    }
-
+    // Roblox does NOT show added experiences in the UI ("After saving, the added experiences will not be visible").
+    // Therefore there is no reliable way to check if a universe ID was already added.
+    // Always return false so we always attempt to add it.
     return false;
   }
 
@@ -1086,11 +1077,8 @@
     await switchToExperiencesTab();
     await wait(800);
 
-    if (alreadyExistsExperience(universeId)) {
-      log(`⚡ INSTANT SKIP: Universe ID (${universeId}) SUDAH ADA pada lagu ini ✔`);
-      return;
-    }
-
+    // NOTE: We do NOT check alreadyExistsExperience() here.
+    // Roblox hides added experiences from the UI, so we always attempt to add.
     const opened = await openExperiencesDialog();
     if (!opened) { log("Gagal membuka dialog Experiences"); return; }
 
