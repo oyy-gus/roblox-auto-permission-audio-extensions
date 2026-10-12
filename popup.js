@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const consoleLog = document.getElementById('consoleLog');
 
   const btnBoth = document.getElementById('btnBoth');
+  const btnThumbnail = document.getElementById('btnThumbnail');
   const btnUsername = document.getElementById('btnUsername');
   const btnUniverse = document.getElementById('btnUniverse');
   const btnScan = document.getElementById('btnScan');
@@ -19,6 +20,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnStop = document.getElementById('btnStop');
   const btnPause = document.getElementById('btnPause');
   const btnReset = document.getElementById('btnReset');
+
+  // Thumbnail Elements
+  const inputThumbnailFile = document.getElementById('inputThumbnailFile');
+  const btnSelectThumb = document.getElementById('btnSelectThumb');
+  const btnClearThumb = document.getElementById('btnClearThumb');
+  const thumbDefaultIcon = document.getElementById('thumbDefaultIcon');
+  const thumbImgPreview = document.getElementById('thumbImgPreview');
+  const thumbFileName = document.getElementById('thumbFileName');
+  const checkIncludeThumbnail = document.getElementById('checkIncludeThumbnail');
+
+  let currentThumbData = null;
+  let currentThumbName = null;
 
   const jsonModal = document.getElementById('jsonModal');
   const btnViewJson = document.getElementById('btnViewJson');
@@ -33,15 +46,89 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let activeJsonTab = 'clean'; // 'clean' | 'moderated'
 
+  function setThumbnailPreview(dataUrl, name) {
+    if (dataUrl) {
+      thumbImgPreview.src = dataUrl;
+      thumbImgPreview.style.display = 'block';
+      thumbDefaultIcon.style.display = 'none';
+      thumbFileName.textContent = name || 'Gambar dipilih';
+      thumbFileName.style.color = '#e4e4e7';
+      btnClearThumb.style.display = 'inline-flex';
+    } else {
+      thumbImgPreview.src = '';
+      thumbImgPreview.style.display = 'none';
+      thumbDefaultIcon.style.display = 'block';
+      thumbFileName.textContent = 'Belum ada gambar dipilih';
+      thumbFileName.style.color = 'var(--text-muted)';
+      btnClearThumb.style.display = 'none';
+    }
+  }
+
+  if (btnSelectThumb) {
+    btnSelectThumb.addEventListener('click', () => {
+      inputThumbnailFile.click();
+    });
+  }
+
+  if (inputThumbnailFile) {
+    inputThumbnailFile.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      if (file.size > 8 * 1024 * 1024) {
+        alert("Ukuran gambar terlalu besar! Maksimal 8MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        currentThumbData = event.target.result;
+        currentThumbName = file.name;
+        setThumbnailPreview(currentThumbData, currentThumbName);
+        chrome.storage.local.set({
+          rbx_thumb_data: currentThumbData,
+          rbx_thumb_name: currentThumbName
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if (btnClearThumb) {
+    btnClearThumb.addEventListener('click', () => {
+      currentThumbData = null;
+      currentThumbName = null;
+      if (inputThumbnailFile) inputThumbnailFile.value = '';
+      setThumbnailPreview(null, null);
+      chrome.storage.local.remove(['rbx_thumb_data', 'rbx_thumb_name']);
+    });
+  }
+
+  if (checkIncludeThumbnail) {
+    checkIncludeThumbnail.addEventListener('change', () => {
+      chrome.storage.local.set({ rbx_include_thumb: checkIncludeThumbnail.checked });
+    });
+  }
+
   // Load Initial Settings
   chrome.storage.local.get(
-    ['usernames', 'universeId', 'rbx_auto_active', 'rbx_paused', 'rbx_mode', 'rbx_index', 'rbx_ids', 'rbx_logs', 'rbx_audio_data', 'rbx_moderated_data'],
+    [
+      'usernames', 'universeId', 'rbx_auto_active', 'rbx_paused', 'rbx_mode',
+      'rbx_index', 'rbx_ids', 'rbx_logs', 'rbx_audio_data', 'rbx_moderated_data',
+      'rbx_thumb_data', 'rbx_thumb_name', 'rbx_include_thumb'
+    ],
     (data) => {
       if (data.usernames) {
         inputUsernames.value = Array.isArray(data.usernames) ? data.usernames.join(', ') : data.usernames;
       }
       if (data.universeId !== undefined) {
         inputUniverseId.value = data.universeId;
+      }
+      if (data.rbx_thumb_data) {
+        currentThumbData = data.rbx_thumb_data;
+        currentThumbName = data.rbx_thumb_name;
+        setThumbnailPreview(data.rbx_thumb_data, data.rbx_thumb_name);
+      }
+      if (data.rbx_include_thumb !== undefined && checkIncludeThumbnail) {
+        checkIncludeThumbnail.checked = data.rbx_include_thumb === true;
       }
       updateUIState(data);
     }
@@ -54,7 +141,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     chrome.storage.local.set({
       usernames: names,
-      universeId: universe
+      universeId: universe,
+      rbx_include_thumb: checkIncludeThumbnail ? checkIncludeThumbnail.checked : false
     });
   }
 
@@ -78,6 +166,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       statusBadge.classList.remove('paused');
       statusText.textContent = mode === 'scan' ? 'SCANNING ALL PAGES' :
                                mode === 'archive_moderated' ? 'ARCHIVING MODERATED' :
+                               mode === 'thumbnail' ? 'UPLOADING THUMBNAILS' :
                                `RUNNING (${mode.toUpperCase()})`;
     } else {
       statusBadge.classList.remove('active');
@@ -148,6 +237,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
+    if (mode === 'thumbnail') {
+      const thumbData = await new Promise(resolve => chrome.storage.local.get(['rbx_thumb_data'], resolve));
+      if (!thumbData.rbx_thumb_data) {
+        alert("Pilih file gambar thumbnail terlebih dahulu!");
+        return;
+      }
+    }
+
     // Force full re-scan of all pages on fresh start
     await chrome.storage.local.set({
       rbx_auto_active: true,
@@ -176,6 +273,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   btnBoth.addEventListener('click', () => launchProcess('both'));
+  if (btnThumbnail) btnThumbnail.addEventListener('click', () => launchProcess('thumbnail'));
   btnUsername.addEventListener('click', () => launchProcess('username'));
   btnUniverse.addEventListener('click', () => launchProcess('universe'));
   btnScan.addEventListener('click', () => launchProcess('scan'));

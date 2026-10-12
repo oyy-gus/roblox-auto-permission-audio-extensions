@@ -17,16 +17,18 @@ Extension browser modern untuk Microsoft Edge & Google Chrome yang mengotomatisa
 - **Tingkatan Moderasi (FATAL vs LOW)**:
   - 🛑 **FATAL**: Audio diblokir/dihapus sistem -> Otomatis diarsip.
   - ⚠️ **LOW**: Judul audio ter-moderasi (`#####`) -> Dicatat sebagai perlu ganti nama, tidak diarsip.
+- **Auto Upload Audio Thumbnail**: Mengunggah gambar thumbnail kustom untuk seluruh aset audio Anda secara massal melalui halaman konfigurasi Roblox (`/store/{id}/configure`). Mendukung format `.png`, `.jpg`, `.bmp`, `.webp` dengan preview instan di popup.
 - **Auto Reload 404 Pages**: Jika halaman permission audio mengembalikan error 404, ekstensi tidak membolos (*skip*), melainkan melakukan muat ulang (*reload*) halaman dan mengulanginya otomatis.
-- **Auto Navigation & Pagination**: Memindai seluruh daftar audio berhalaman (pagination), secara otomatis berpindah dari satu audio ke audio berikutnya (`/store/{id}/permissions`).
-- **5 Mode Operasi**:
+- **Auto Navigation & Pagination**: Memindai seluruh daftar audio berhalaman (pagination), secara otomatis berpindah dari satu audio ke audio berikutnya (`/store/{id}/permissions` atau `/store/{id}/configure`).
+- **6 Mode Operasi**:
   1. 🚀 **Start Both**: Menambahkan Collaborators (Username) dan Experiences (Universe ID).
-  2. 👤 **Start Username**: Hanya menambahkan Collaborators.
-  3. 🎮 **Start Universe**: Hanya menambahkan Experiences.
-  4. 🔍 **Scan Only**: Memindai seluruh audio dan mengkategorikan moderasi tanpa memberikan izin.
-  5. 📦 **Archive Moderated**: Mengarsip semua audio ter-moderasi kategori FATAL.
+  2. 🖼️ **Auto Upload Thumbnail**: Mengunggah file thumbnail ke seluruh audio secara otomatis.
+  3. 👤 **Start Username**: Hanya menambahkan Collaborators.
+  4. 🎮 **Start Universe**: Hanya menambahkan Experiences.
+  5. 🔍 **Scan Only**: Memindai seluruh audio dan mengkategorikan moderasi tanpa memberikan izin.
+  6. 📦 **Archive Moderated**: Mengarsip semua audio ter-moderasi kategori FATAL.
 - **Real-Time Progress & Log Console**: Persentase progres dan log aktivitas real-time yang tersimpan otomatis di `chrome.storage`.
-- **Audio List JSON Exporter**: Menyimpan daftar lagu hasil scan lengkap dengan `title`, `sound_id`, dan `moderationLevel`, dapat disalin dengan 1 klik.
+- **Audio List JSON Exporter**: Menyimpan daftar lagu hasil scan lengkap dengan `title`, `sound_id`, `soundThumbnail`, dan `moderationLevel`, dapat disalin dengan 1 klik.
 
 ---
 

@@ -58,12 +58,45 @@
       <input type="text" id="inputUniverseId" placeholder="Contoh: 1234567890">
       <div class="help-text">Universe ID yang akan ditambahkan ke Experiences</div>
     </div>
+
+    <div class="form-group">
+      <label>Thumbnail Audio (Opsional)</label>
+      <div class="thumbnail-picker-container">
+        <div id="thumbPreviewBox" class="thumb-preview-box">
+          <svg id="thumbDefaultIcon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zm-2.5 9.77l-4.5-4.5H3v6h4l4.5 4.5v-6z"/>
+          </svg>
+          <img id="thumbImgPreview" src="" alt="Thumbnail" class="thumb-img-preview" style="display: none;">
+        </div>
+        <div class="thumb-info-wrap">
+          <input type="file" id="inputThumbnailFile" accept="image/png, image/jpeg, image/jpg, image/bmp, image/webp" style="display: none;">
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <button type="button" id="btnSelectThumb" class="btn btn-secondary" style="padding: 5px 9px; font-size: 10.5px;">
+              📁 Pilih Gambar
+            </button>
+            <button type="button" id="btnClearThumb" class="btn btn-danger" style="display: none; padding: 5px 8px; font-size: 10px;">
+              ✕ Hapus
+            </button>
+          </div>
+          <div id="thumbFileName" class="help-text" style="word-break: break-all; margin-top: 4px;">Belum ada gambar dipilih</div>
+        </div>
+      </div>
+      <div class="checkbox-group" style="margin-top: 8px; display: flex; align-items: center; gap: 7px;">
+        <input type="checkbox" id="checkIncludeThumbnail" style="width: auto; cursor: pointer; accent-color: #ffffff;">
+        <label for="checkIncludeThumbnail" style="font-size: 10.5px; margin-bottom: 0; cursor: pointer; color: var(--text-secondary);">
+          Sertakan Thumbnail saat Start Both / Username / Universe
+        </label>
+      </div>
+    </div>
   </section>
 
   <!-- Action Controls Grid -->
   <div class="button-grid">
     <button id="btnBoth" class="btn btn-primary">
       🚀 Start Both (Collab + Exp)
+    </button>
+    <button id="btnThumbnail" class="btn btn-thumb" style="grid-column: span 2;">
+      🖼️ Auto Upload Thumbnail
     </button>
     <button id="btnUsername" class="btn btn-secondary">
       👤 Start Username

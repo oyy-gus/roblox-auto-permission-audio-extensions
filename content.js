@@ -293,10 +293,16 @@
       if (soundId && !seenIds.has(soundId)) {
         seenIds.add(soundId);
         const modLevel = getRowModerationLevel(row);
+        let thumbUrl = "";
+        const rowImg = row.querySelector('img');
+        if (rowImg && rowImg.src && !rowImg.src.includes('UnapprovedImage') && !rowImg.src.includes('moderated')) {
+          thumbUrl = rowImg.src;
+        }
+
         const item = {
           soundId: soundId,
           soundTitle: title || `Audio ${soundId}`,
-          soundThumbnail: "",
+          soundThumbnail: thumbUrl,
           moderated: modLevel !== null,
           moderationLevel: modLevel ? modLevel.level : null,
           moderationReason: modLevel ? modLevel.reason : null
@@ -451,7 +457,9 @@
       if (mode === 'archive_moderated') {
         await processArchiveModerated(allModerated);
       } else {
-        window.location.href = `https://create.roblox.com/dashboard/creations/store/${targetIds[0]}/permissions`;
+        const settings = await new Promise(resolve => chrome.storage.local.get(['rbx_include_thumb', 'rbx_thumb_data'], resolve));
+        const firstPage = (mode === 'thumbnail' || (settings.rbx_include_thumb && settings.rbx_thumb_data)) ? 'configure' : 'permissions';
+        window.location.href = `https://create.roblox.com/dashboard/creations/store/${targetIds[0]}/${firstPage}`;
       }
     } else {
       await chrome.storage.local.set({ rbx_auto_active: false });
@@ -468,8 +476,11 @@
 
     if (nextIndex < ids.length) {
       const nextId = ids[nextIndex];
+      const settings = await new Promise(resolve => chrome.storage.local.get(['rbx_mode', 'rbx_include_thumb', 'rbx_thumb_data'], resolve));
+      const mode = settings.rbx_mode || 'both';
+      const targetPage = (mode === 'thumbnail' || (settings.rbx_include_thumb && settings.rbx_thumb_data)) ? 'configure' : 'permissions';
       log(`[${nextIndex + 1}/${ids.length}] Otomatis berpindah ke lagu selanjutnya (ID: ${nextId})...`);
-      window.location.href = `https://create.roblox.com/dashboard/creations/store/${nextId}/permissions`;
+      window.location.href = `https://create.roblox.com/dashboard/creations/store/${nextId}/${targetPage}`;
     } else {
       await chrome.storage.local.set({ rbx_auto_active: false });
       log(`============================`);
@@ -733,19 +744,97 @@
   async function clickSaveChanges() {
     await wait(300);
     for (const btn of document.querySelectorAll('button')) {
-      const text = btn.textContent?.trim() || '';
-      if (text.includes('Save Changes')) {
+      const text = (btn.textContent?.trim() || '').toLowerCase();
+      if (text.includes('save changes') || text.includes('simpan perubahan') || text === 'save' || text === 'simpan') {
         if (isButtonDisabled(btn)) {
           log('Save Changes tidak aktif (sudah tersimpan) ✔');
           return true;
         }
         simulateClick(btn);
-        log('Save Changes diklik ✔');
-        await wait(1200);
+        log(`Tombol "${btn.textContent?.trim()}" diklik ✔`);
+        await wait(1500);
         return true;
       }
     }
     return true;
+  }
+
+  // DataURL to File Object Converter
+  function dataURLtoFile(dataurl, filename = 'thumbnail.png') {
+    try {
+      const arr = dataurl.split(',');
+      const mime = (arr[0].match(/:(.*?);/) || [])[1] || 'image/png';
+      const bstr = atob(arr[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      return new File([u8arr], filename, { type: mime });
+    } catch (e) {
+      log(`Gagal konversi DataURL: ${e.message}`);
+      return null;
+    }
+  }
+
+  // Audio Thumbnail Uploader via Configuration Page
+  async function uploadAudioThumbnail(soundId, thumbDataUrl, thumbName) {
+    log(`── [THUMBNAIL UPLOAD (ID: ${soundId})] ──`);
+    if (!thumbDataUrl) {
+      log(`⚠️ Data thumbnail tidak ditemukan`);
+      return false;
+    }
+
+    const file = dataURLtoFile(thumbDataUrl, thumbName || 'thumbnail.png');
+    if (!file) {
+      log(`⚠️ Gagal memproses file gambar thumbnail`);
+      return false;
+    }
+
+    await wait(1200);
+
+    // Look for file input in DOM
+    let fileInput = document.querySelector('input[type="file"]');
+
+    if (!fileInput) {
+      const uploadBtns = Array.from(document.querySelectorAll('button')).filter(b => {
+        const txt = (b.textContent?.trim() || '').toLowerCase();
+        return txt === 'upload' || txt.includes('upload');
+      });
+
+      for (const btn of uploadBtns) {
+        simulateClick(btn);
+        await wait(600);
+        fileInput = document.querySelector('input[type="file"]');
+        if (fileInput) break;
+      }
+    }
+
+    if (!fileInput) {
+      log(`⚠️ Elemen upload file tidak ditemukan pada form konfigurasi`);
+      return false;
+    }
+
+    try {
+      log(`Menyematkan file thumbnail: ${file.name} (${Math.round(file.size / 1024)} KB)...`);
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+
+      fileInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      fileInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+
+      await wait(1500);
+
+      log(`Menyimpan perubahan thumbnail...`);
+      await clickSaveChanges();
+      await wait(1500);
+      log(`✔ Thumbnail berhasil diperbarui (ID: ${soundId})`);
+      return true;
+    } catch (err) {
+      log(`Error upload thumbnail (ID: ${soundId}): ${err.message}`);
+      return false;
+    }
   }
 
   // Collaborators Tab Logic
@@ -975,7 +1064,10 @@
   // Main Asset Loop Controller
   async function processAssetsLoop() {
     chrome.storage.local.get(
-      ['rbx_auto_active', 'rbx_needs_rescan', 'rbx_ids', 'rbx_audio_data', 'rbx_moderated_data', 'rbx_mode', 'rbx_index', 'usernames', 'universeId'],
+      [
+        'rbx_auto_active', 'rbx_needs_rescan', 'rbx_ids', 'rbx_audio_data', 'rbx_moderated_data',
+        'rbx_mode', 'rbx_index', 'usernames', 'universeId', 'rbx_thumb_data', 'rbx_thumb_name', 'rbx_include_thumb'
+      ],
       async (data) => {
         if (data.rbx_auto_active !== true) return;
 
@@ -1024,6 +1116,9 @@
         const currentId = storeMatch ? storeMatch[1] : null;
         const pageType = storeMatch ? storeMatch[2] : null;
 
+        const shouldConfigureFirst = (mode === 'thumbnail' || (data.rbx_include_thumb && data.rbx_thumb_data));
+        const targetPage = shouldConfigureFirst ? 'configure' : 'permissions';
+
         if (currentId !== id) {
           // Before navigating, check if we're currently on a 404 page
           // (Roblox sometimes redirects 404 URLs to dashboard/other pages)
@@ -1035,9 +1130,9 @@
 
             if (retryCount < MAX_RETRY) {
               await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
-              log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Membuka ulang halaman permission ID: ${id} dalam 3 detik...`);
+              log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Membuka ulang halaman ID: ${id} dalam 3 detik...`);
               await wait(3000);
-              window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
+              window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`;
             } else {
               await chrome.storage.local.set({ [retryKey]: 0 });
               const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
@@ -1051,12 +1146,12 @@
             }
             return;
           }
-          log(`[${index + 1}/${ids.length}] Navigasi ke ID: ${id}`);
-          window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
+          log(`[${index + 1}/${ids.length}] Navigasi ke ID: ${id} (${targetPage})`);
+          window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`;
           return;
         }
 
-        // ── 404 CHECK: after landing on the permissions page ──
+        // ── 404 CHECK: after landing on the page ──
         await wait(800);
         if (is404Page()) {
           const retryKey = `rbx_retry_${id}`;
@@ -1066,9 +1161,9 @@
 
           if (retryCount < MAX_RETRY) {
             await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
-            log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Reload halaman permission ID: ${id} dalam 3 detik...`);
+            log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Reload halaman ID: ${id} dalam 3 detik...`);
             await wait(3000);
-            window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
+            window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`;
           } else {
             await chrome.storage.local.set({ [retryKey]: 0 });
             const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
@@ -1103,7 +1198,19 @@
             return;
           }
 
-          log(`Pindah dari Configure ke Permissions tab (ID: ${id})...`);
+          const songName = allData[index]?.soundTitle || allData[index]?.title || id;
+          updateHUDInfo(songName, id, index + 1, ids.length, mode);
+
+          if (data.rbx_thumb_data) {
+            await uploadAudioThumbnail(id, data.rbx_thumb_data, data.rbx_thumb_name);
+          }
+
+          if (mode === 'thumbnail') {
+            await goToNextTrack(index, ids);
+            return;
+          }
+
+          log(`Thumbnail selesai, pindah ke Permissions tab (ID: ${id})...`);
           window.location.href = `https://create.roblox.com/dashboard/creations/store/${id}/permissions`;
           return;
         }
