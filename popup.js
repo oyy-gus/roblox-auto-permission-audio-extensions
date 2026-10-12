@@ -248,6 +248,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Force full re-scan of all pages on fresh start
     await chrome.storage.local.set({
       rbx_auto_active: true,
+      rbx_paused: false,
       rbx_needs_rescan: true,
       rbx_mode: mode,
       rbx_index: 0,

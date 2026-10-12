@@ -9,6 +9,8 @@
   // ── In-memory state (synced instantly via storage listener & messages) ──
   let _state = { active: false, paused: false };
   let _isProcessing = false;
+  let hudElement = null;
+  let recentLogs = [];
 
   // Sync state from storage once at startup
   chrome.storage.local.get(['rbx_auto_active', 'rbx_paused'], (d) => {
