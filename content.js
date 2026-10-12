@@ -179,6 +179,16 @@
   async function waitForElement(selector, timeout = 15000, root = document) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
+      checkAbort();
+      await waitIfPaused();
+      if (isErrorOr404Page()) {
+        const tryAgainBtn = getTryAgainButton();
+        if (tryAgainBtn) {
+          log("⚠️ Halaman error Roblox ('Oh noes!') terdeteksi saat menunggu elemen, klik 'Try again'...");
+          simulateClick(tryAgainBtn);
+          await iWait(2000);
+        }
+      }
       const el = root.querySelector(selector);
       if (el) return el;
       await iWait(200);
@@ -268,6 +278,16 @@
 
   async function retry(fn, attempts = 4, delay = 1000) {
     for (let i = 0; i < attempts; i++) {
+      checkAbort();
+      await waitIfPaused();
+      if (isErrorOr404Page()) {
+        const tryAgainBtn = getTryAgainButton();
+        if (tryAgainBtn) {
+          log("⚠️ Halaman error Roblox ('Oh noes!') terdeteksi, klik 'Try again'...");
+          simulateClick(tryAgainBtn);
+          await iWait(2000);
+        }
+      }
       if (await fn()) return true;
       await iWait(delay);
     }
@@ -334,15 +354,38 @@
     return getAudioModerationInfo().isModerated;
   }
 
-  // 404 Page Detector — checks if current page is a Roblox 404
-  function is404Page() {
-    const bodyText = document.body ? document.body.innerText : '';
-    const title = document.title || '';
-    return bodyText.includes("We couldn't find the page you were looking for") ||
-           bodyText.includes('404 Page Not Found') ||
-           title.includes('404') ||
-           document.querySelector('.web-blox-css-tss-5uh6hj-Grid-root-loggedinErrorArea, [class*="loggedinErrorArea"]') !== null;
+  // Detects the "Try again" button shown on Roblox crash/error screens
+  function getTryAgainButton() {
+    for (const btn of document.querySelectorAll('button')) {
+      const txt = (btn.textContent?.trim() || '').toLowerCase();
+      if (txt === 'try again' || txt.includes('try again') || txt === 'coba lagi') {
+        return btn;
+      }
+    }
+    return null;
   }
+
+  // 404 & Crash Page Detector — detects Roblox 404, "Oh noes! Could not load this page", and generic crash pages
+  function isErrorOr404Page() {
+    const bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+    const title = (document.title || '').toLowerCase();
+
+    const is404 = bodyText.includes("we couldn't find the page") ||
+                  bodyText.includes('404 page not found') ||
+                  title.includes('404') ||
+                  document.querySelector('.web-blox-css-tss-5uh6hj-Grid-root-loggedinErrorArea, [class*="loggedinErrorArea"]') !== null;
+
+    const isCrash = bodyText.includes('oh noes!') ||
+                    bodyText.includes('could not load this page') ||
+                    bodyText.includes('please try again later') ||
+                    bodyText.includes('something went wrong');
+
+    const hasTryAgain = getTryAgainButton() !== null;
+
+    return is404 || isCrash || hasTryAgain;
+  }
+
+  const is404Page = isErrorOr404Page;
 
   // Returns null if not moderated, or { level: 'FATAL'|'LOW', reason } if moderated
   function getRowModerationLevel(row) {
@@ -1334,9 +1377,18 @@
         return;
       }
 
-      // ── 404 CHECK: after landing on the page ──
+      // ── 404 & CRASH PAGE CHECK ("Oh noes!"): after landing on the page ──
       await iWait(800);
-      if (is404Page()) {
+      if (isErrorOr404Page()) {
+        const tryAgainBtn = getTryAgainButton();
+        if (tryAgainBtn) {
+          log("⚠️ Halaman error Roblox ('Oh noes!') terdeteksi, mencoba klik tombol 'Try again'...");
+          simulateClick(tryAgainBtn);
+          await iWait(2500);
+        }
+      }
+
+      if (isErrorOr404Page()) {
         const retryKey = `rbx_retry_${id}`;
         const retryData = await new Promise(resolve => chrome.storage.local.get([retryKey], resolve));
         const retryCount = retryData[retryKey] || 0;
@@ -1344,13 +1396,13 @@
 
         if (retryCount < MAX_RETRY) {
           await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
-          log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Reload halaman ID: ${id} dalam 3 detik...`);
+          log(`🔄 [Error/404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Reload halaman ID: ${id} dalam 3 detik...`);
           await iWait(3000);
           navigateTo(`https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`);
         } else {
           await chrome.storage.local.set({ [retryKey]: 0 });
           const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
-          log(`🚧 [404] SKIP permanen setelah ${MAX_RETRY}x retry: "${songName404}" (ID: ${id})`);
+          log(`🚧 [Error/404] SKIP permanen setelah ${MAX_RETRY}x retry: "${songName404}" (ID: ${id})`);
           const skippedList = data.rbx_404_ids || [];
           if (!skippedList.includes(id)) {
             skippedList.push(id);
