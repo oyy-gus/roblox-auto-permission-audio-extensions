@@ -77,22 +77,39 @@
   function setNativeValue(el, value) {
     if (!el) return;
     const previousValue = el.value;
-    const prototype = Object.getPrototypeOf(el);
-    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value') ||
-                       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-    const setter = descriptor?.set;
-    if (setter) {
-      setter.call(el, value);
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(el), 'value'
+    )?.set || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    if (nativeInputValueSetter) {
+      nativeInputValueSetter.call(el, value);
     } else {
       el.value = value;
     }
     if (el._valueTracker) {
       el._valueTracker.setValue(previousValue);
     }
-    // React 17+ needs InputEvent with inputType to trigger onChange
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: value }));
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: value, composed: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+  }
+
+  // Inject text into an input using execCommand (works best across React versions)
+  async function execCommandInsert(el, text) {
+    try {
+      el.focus();
+      await wait(100);
+      // Select all & delete first
+      document.execCommand('selectAll', false);
+      await wait(50);
+      document.execCommand('delete', false);
+      await wait(100);
+      // Insert text via execCommand (triggers native input events React listens to)
+      const result = document.execCommand('insertText', false, text);
+      await wait(100);
+      return result;
+    } catch (e) {
+      return false;
+    }
   }
 
   // DOM Helpers
@@ -106,22 +123,84 @@
     return null;
   }
 
-  async function typeUsername(input, text) {
-    try { input.focus(); } catch(e) {}
-    simulateClick(input);
-    await wait(300);
-    // Clear existing value
-    setNativeValue(input, '');
-    await wait(200);
-    // Type char by char to trigger React onChange on every keystroke
-    for (const char of text) {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true, cancelable: true }));
-      input.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true, cancelable: true }));
-      setNativeValue(input, input.value + char);
-      input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true, cancelable: true }));
-      await wait(70 + Math.random() * 50);
+  // Find input inside an open dialog — searches document-wide to handle React Portals
+  function findDialogInput(placeholderHints = []) {
+    // First try inside known dialog roots
+    const dialogRoots = [
+      ...document.querySelectorAll('[role="dialog"], [data-testid*="modal"], [data-radix-dialog-content]')
+    ];
+    for (const root of dialogRoots) {
+      const inputs = root.querySelectorAll('input');
+      for (const inp of inputs) {
+        if (inp.type === 'hidden') continue;
+        if (placeholderHints.length === 0) return inp;
+        const ph = (inp.placeholder || '').toLowerCase();
+        for (const hint of placeholderHints) {
+          if (ph.includes(hint.toLowerCase())) return inp;
+        }
+      }
+      // If hints didn't match, return first visible input in dialog
+      const allInputs = root.querySelectorAll('input:not([type="hidden"])');
+      if (allInputs.length > 0 && placeholderHints.length === 0) return allInputs[0];
     }
+    // Fallback: search entire document
+    const allInputs = document.querySelectorAll('input:not([type="hidden"])');
+    for (const inp of allInputs) {
+      const ph = (inp.placeholder || '').toLowerCase();
+      if (placeholderHints.length === 0) return inp;
+      for (const hint of placeholderHints) {
+        if (ph.includes(hint.toLowerCase())) return inp;
+      }
+    }
+    return null;
+  }
+
+  // Master input filler: tries execCommand first, falls back to setNativeValue char-by-char
+  async function fillInput(input, text) {
+    if (!input) return false;
+    input.scrollIntoView({ block: 'center' });
+    simulateClick(input);
+    await wait(200);
+    input.focus();
     await wait(150);
+
+    // Method 1: execCommand (most reliable, bypasses React synthetic event quirks)
+    const execOk = await execCommandInsert(input, text);
+    if (execOk && input.value === text) {
+      log(`[fillInput] execCommand OK: "${text}"`);
+      return true;
+    }
+
+    // Method 2: setNativeValue + char-by-char typing
+    log(`[fillInput] execCommand gagal, coba char-by-char...`);
+    setNativeValue(input, '');
+    await wait(150);
+    for (const char of text) {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: char, bubbles: true, cancelable: true, composed: true }));
+      input.dispatchEvent(new KeyboardEvent('keypress', { key: char, bubbles: true, cancelable: true, composed: true }));
+      setNativeValue(input, input.value + char);
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: char, bubbles: true, cancelable: true, composed: true }));
+      await wait(80 + Math.random() * 40);
+    }
+    await wait(200);
+
+    // Method 3: If still empty, force via ClipboardEvent paste simulation
+    if (!input.value) {
+      log(`[fillInput] Mencoba simulasi paste...`);
+      input.focus();
+      const dt = new DataTransfer();
+      dt.setData('text/plain', text);
+      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      setNativeValue(input, text);
+      await wait(200);
+    }
+
+    log(`[fillInput] Hasil akhir value: "${input.value}"`);
+    return input.value.length > 0;
+  }
+
+  async function typeUsername(input, text) {
+    return fillInput(input, text);
   }
 
   async function retry(fn, attempts = 4, delay = 1000) {
@@ -934,16 +1013,19 @@
         continue;
       }
 
-      const input = dialogRoot.querySelector(
-        'input[placeholder*="Search"] input, input[placeholder*="friend"], input[placeholder*="Search"], [data-testid="autocomplete"] input, input[type="text"], input'
-      ) || document.querySelector('[role="dialog"] input, [data-testid="add-collaborators-modal"] input');
-
+      // Find input using document-wide search (handles React portal rendering)
+      // Placeholder: "Search for a friend or group"
+      let input = findDialogInput(['friend', 'group', 'search']);
+      if (!input) {
+        // Broader fallback
+        input = document.querySelector('[role="dialog"] input:not([type="hidden"]), [data-testid*="modal"] input:not([type="hidden"])');
+      }
       if (!input) { log("Input username tidak ditemukan"); continue; }
+      log(`Input ditemukan: placeholder="${input.placeholder}"`);
 
-      setNativeValue(input, '');
-      await wait(200);
-      await typeUsername(input, username);
-      await wait(400);
+      const filled = await fillInput(input, username);
+      if (!filled) { log(`Gagal mengisi input untuk ${username}`); continue; }
+      await wait(600);
 
       const opts = await waitDropdown(6000);
       if (!opts || opts.length === 0) {
@@ -1012,34 +1094,48 @@
     const opened = await openExperiencesDialog();
     if (!opened) { log("Gagal membuka dialog Experiences"); return; }
 
-    const dialog = await waitForElement('[data-testid="add-experiences-modal"], [role="dialog"]', 10000);
-    if (!dialog) { log("Dialog Experiences tidak muncul"); return; }
+    // Wait for dialog to appear
+    await waitForElement('[role="dialog"], [data-testid*="modal"]', 10000);
+    await wait(600);
     log("Dialog Experiences terbuka ✔");
-    await wait(500);
 
-    // Find the universe ID input with broader selectors
-    const input = await waitForElement(
-      '#proposed-experience-search, input[placeholder*="Universe"], input[placeholder*="universe"], input[placeholder*="search"], input[placeholder*="Search"], input[type="text"], input',
-      8000, dialog
-    );
-    if (!input) { log("Input experience tidak ditemukan"); return; }
+    // Find input: placeholder is "Enter experience IDs"
+    let input = findDialogInput(['experience', 'Enter experience', 'experience IDs']);
+    if (!input) {
+      // wait a bit more and retry
+      await wait(800);
+      input = findDialogInput(['experience', 'Enter', 'IDs']);
+    }
+    if (!input) {
+      input = document.querySelector('[role="dialog"] input:not([type="hidden"]), [data-testid*="modal"] input:not([type="hidden"])');
+    }
+    if (!input) { log("⚠️ Input experience tidak ditemukan"); return; }
+    log(`Input ditemukan: placeholder="${input.placeholder}"`);
 
-    log(`Memasukkan Universe ID char-by-char: ${universeId}`);
-    // Use typeUsername (char-by-char) so React controlled input fires onChange on every keystroke
-    await typeUsername(input, String(universeId));
-    log(`Universe ID dimasukkan: ${universeId}`);
+    // Fill the input
+    const filled = await fillInput(input, String(universeId));
+    log(`Universe ID ${filled ? 'berhasil' : 'GAGAL'} dimasukkan: "${input.value}"`);
+    await wait(800);
 
-    // Wait longer for the Add button to become enabled after input
+    // Find the Add button — in Experiences dialog it is a sibling button next to the input (not inside dialog subtree always)
     log("Menunggu tombol Add aktif...");
     let addBtn = null;
     const addStart = Date.now();
     while (Date.now() - addStart < 8000) {
-      for (const btn of dialog.querySelectorAll('button')) {
-        const text = (btn.textContent?.trim() || '');
-        if ((text === 'Add' || text.toLowerCase() === 'add') && !isButtonDisabled(btn)) {
-          addBtn = btn;
-          break;
+      // Search in dialog and also in entire document for the Add button
+      const searchRoots = [
+        ...document.querySelectorAll('[role="dialog"], [data-testid*="modal"]'),
+        document
+      ];
+      for (const root of searchRoots) {
+        for (const btn of root.querySelectorAll('button')) {
+          const txt = (btn.textContent?.trim() || '').toLowerCase();
+          if (txt === 'add' && !isButtonDisabled(btn)) {
+            addBtn = btn;
+            break;
+          }
         }
+        if (addBtn) break;
       }
       if (addBtn) break;
       await wait(300);
@@ -1049,10 +1145,9 @@
       simulateClick(addBtn);
       log("Tombol Add diklik ✔");
     } else {
-      log("⚠️ Tombol Add tidak aktif / tidak ditemukan — coba klik Add dengan Enter");
-      // Fallback: press Enter on the input
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true, cancelable: true }));
+      log("⚠️ Tombol Add tidak aktif/tidak ditemukan — coba Enter sebagai fallback");
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
     }
     await wait(1000);
 
