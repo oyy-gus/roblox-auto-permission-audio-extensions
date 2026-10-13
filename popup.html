@@ -70,7 +70,7 @@
         </div>
         <div class="thumb-info-wrap">
           <input type="file" id="inputThumbnailFile" accept="image/png, image/jpeg, image/jpg, image/bmp, image/webp" style="display: none;">
-          <div style="display: flex; gap: 6px; align-items: center;">
+          <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
             <button type="button" id="btnSelectThumb" class="btn btn-secondary" style="padding: 5px 9px; font-size: 10.5px;">
               📁 Pilih Gambar
             </button>
@@ -78,6 +78,9 @@
               ✕ Hapus
             </button>
           </div>
+          <button type="button" id="btnOpenTab" class="btn btn-neutral" style="padding: 5px 9px; font-size: 10px; margin-top: 4px;">
+            🗗 Buka di Tab (jika gagal pilih gambar)
+          </button>
           <div id="thumbFileName" class="help-text" style="word-break: break-all; margin-top: 4px;">Belum ada gambar dipilih</div>
         </div>
       </div>

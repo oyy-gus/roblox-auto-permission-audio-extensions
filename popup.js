@@ -1,4 +1,4 @@
-// Roblox Auto Permission - Popup Logic v10.6
+// Roblox Auto Permission - Popup Logic v10.8 (Final)
 
 document.addEventListener('DOMContentLoaded', async () => {
   const inputUsernames = document.getElementById('inputUsernames');
@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const inputThumbnailFile = document.getElementById('inputThumbnailFile');
   const btnSelectThumb = document.getElementById('btnSelectThumb');
   const btnClearThumb = document.getElementById('btnClearThumb');
+  const btnOpenTab = document.getElementById('btnOpenTab');
   const thumbDefaultIcon = document.getElementById('thumbDefaultIcon');
   const thumbImgPreview = document.getElementById('thumbImgPreview');
   const thumbFileName = document.getElementById('thumbFileName');
@@ -44,7 +45,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   const countClean = document.getElementById('countClean');
   const countModerated = document.getElementById('countModerated');
 
-  let activeJsonTab = 'clean'; // 'clean' | 'moderated'
+  let activeJsonTab = 'clean'; // 'clean' | 'moderated' | 'fatal' | 'low'
+
+  const MAX_THUMB_BYTES = 2 * 1024 * 1024; // 2MB
 
   function setThumbnailPreview(dataUrl, name) {
     if (dataUrl) {
@@ -64,6 +67,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // Buka popup sebagai tab biasa (pemilih file di HP tidak menutup halaman)
+  if (btnOpenTab) {
+    btnOpenTab.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+    });
+  }
+
   if (btnSelectThumb) {
     btnSelectThumb.addEventListener('click', () => {
       inputThumbnailFile.click();
@@ -74,8 +84,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     inputThumbnailFile.addEventListener('change', (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
-      if (file.size > 8 * 1024 * 1024) {
-        alert("Ukuran gambar terlalu besar! Maksimal 8MB.");
+      if (file.size > MAX_THUMB_BYTES) {
+        alert("Ukuran gambar terlalu besar! Maksimal 2MB.");
         return;
       }
       const reader = new FileReader();
@@ -86,8 +96,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         chrome.storage.local.set({
           rbx_thumb_data: currentThumbData,
           rbx_thumb_name: currentThumbName
+        }, () => {
+          if (chrome.runtime.lastError) {
+            alert("Gagal menyimpan gambar: " + chrome.runtime.lastError.message);
+          }
         });
       };
+      reader.onerror = () => alert("Gagal membaca file gambar.");
       reader.readAsDataURL(file);
     });
   }
@@ -266,7 +281,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!tab.url.includes('activeTab=Audio')) {
         chrome.tabs.update(tab.id, { url: targetUrl });
       } else {
-        chrome.tabs.sendMessage(tab.id, { action: 'start', mode: mode });
+        try {
+          await chrome.tabs.sendMessage(tab.id, { action: 'start', mode: mode });
+        } catch (e) {
+          // Content script belum ada di tab ini: reload tab.
+          // Proses otomatis jalan karena rbx_auto_active sudah true di storage.
+          chrome.tabs.reload(tab.id);
+        }
       }
     } else {
       chrome.tabs.create({ url: targetUrl });

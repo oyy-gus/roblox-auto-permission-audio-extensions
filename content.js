@@ -1,4 +1,4 @@
-// Roblox Auto Permission - Content Script v10.8 (Instant Stop/Pause Response)
+// Roblox Auto Permission - Content Script v10.14 (Skip universe "Already added", verifikasi notifikasi untuk yang baru)
 
 (function () {
   'use strict';
@@ -326,7 +326,8 @@
     const hasModBanner = pageText.includes('Your audio was moderated.') ||
                          pageText.includes('Removed for violations of Roblox Terms of Use');
 
-    const nameInput = document.querySelector('input#name, input[name="name"], [data-testid="asset-name-input"]');
+    // Di Creator Hub, kolom Name adalah <textarea id="name">, bukan <input>
+    const nameInput = document.querySelector('textarea#name, textarea[name="name"], input#name, input[name="name"], [data-testid="asset-name-input"]');
     const nameValue = nameInput ? nameInput.value : '';
     const pageTitle = document.title || '';
     const hasHashtagTitle = nameValue.includes('#####') || pageTitle.includes('#####') || pageText.includes('##################################################');
@@ -397,8 +398,8 @@
     let hasModSvg = false;
     for (const svg of svgs) {
       const html = svg.outerHTML.toLowerCase();
-      if (html.includes('ban') || html.includes('prohibited') || html.includes('lock') ||
-          html.includes('circle-slash') || html.includes('d="m12 2a10 10')) {
+      // Word-boundary match so "clock", "block", "banner" etc. are NOT mistaken for ban/lock icons
+      if (/\b(ban|prohibited|lock|circle-slash)\b/.test(html) || html.includes('d="m12 2a10 10')) {
         hasModSvg = true;
         break;
       }
@@ -408,7 +409,7 @@
     let hasUnapprovedImg = false;
     for (const img of imgs) {
       const src = img.src || '';
-      if (src.includes('UnapprovedImage') || src.includes('moderated') || src.includes('ban')) {
+      if (src.includes('UnapprovedImage') || src.includes('moderated')) {
         hasUnapprovedImg = true;
         break;
       }
@@ -623,6 +624,8 @@
       rbx_ids: targetIds,
       rbx_audio_data: allClean,
       rbx_moderated_data: allModerated,
+      rbx_thumb_failed: [],
+      rbx_exp_failed: [],
       rbx_index: 0,
       rbx_mode: mode,
       rbx_needs_rescan: false
@@ -657,7 +660,8 @@
     await waitIfPaused();
     const nextIndex = currentIndex + 1;
     await chrome.storage.local.set({ rbx_index: nextIndex });
-    await iWait(600);
+    // Slightly longer gap between tracks to avoid Roblox rate limiting ("Oh noes!" pages)
+    await iWait(1500);
     checkAbort();
 
     if (nextIndex < ids.length) {
@@ -669,10 +673,21 @@
       navigateTo(`https://create.roblox.com/dashboard/creations/store/${nextId}/${targetPage}`);
     } else {
       await chrome.storage.local.set({ rbx_auto_active: false });
+      const failData = await new Promise(resolve => chrome.storage.local.get(['rbx_thumb_failed', 'rbx_404_ids', 'rbx_exp_failed'], resolve));
+      const failed = failData.rbx_thumb_failed || [];
+      const skipped404 = failData.rbx_404_ids || [];
+      const expFailed = failData.rbx_exp_failed || [];
       log(`============================`);
       log(`SEMUA LAGU SELESAI DIPROSES (${ids.length} Audio) ✔`);
+      if (failed.length > 0) log(`⚠️ Thumbnail GAGAL (${failed.length}): ${failed.join(', ')}`);
+      if (skipped404.length > 0) log(`🚧 Terlewat karena error/404 (${skipped404.length}): ${skipped404.join(', ')}`);
+      if (expFailed.length > 0) log(`⚠️ Universe GAGAL terverifikasi (${expFailed.length}): ${expFailed.join(', ')}`);
       log(`============================`);
-      alert(`SEMUA LAGU SELESAI DIPROSES ✔\nTotal: ${ids.length} audio.`);
+      let msg = `SEMUA LAGU SELESAI DIPROSES ✔\nTotal: ${ids.length} audio.`;
+      if (failed.length > 0) msg += `\n\n⚠️ Thumbnail gagal: ${failed.length} audio (ID ada di Live Logs).`;
+      if (expFailed.length > 0) msg += `\n⚠️ Universe gagal terverifikasi: ${expFailed.length} audio (ID ada di Live Logs).`;
+      if (skipped404.length > 0) msg += `\n🚧 Terlewat error/404: ${skipped404.length} audio.`;
+      alert(msg);
     }
   }
 
@@ -927,20 +942,31 @@
     return true;
   }
 
-  async function clickSaveChanges() {
-    await iWait(300);
+  // Find the Save Changes button (or null)
+  function getSaveButton() {
+    const byTestId = document.querySelector('button[data-testid="save-button"]');
+    if (byTestId) return byTestId;
     for (const btn of document.querySelectorAll('button')) {
       const text = (btn.textContent?.trim() || '').toLowerCase();
       if (text.includes('save changes') || text.includes('simpan perubahan') || text === 'save' || text === 'simpan') {
-        if (isButtonDisabled(btn)) {
-          log('Save Changes tidak aktif (sudah tersimpan) ✔');
-          return true;
-        }
-        simulateClick(btn);
-        log(`Tombol "${btn.textContent?.trim()}" diklik ✔`);
-        await iWait(1500);
+        return btn;
+      }
+    }
+    return null;
+  }
+
+  async function clickSaveChanges() {
+    await iWait(300);
+    const btn = getSaveButton();
+    if (btn) {
+      if (isButtonDisabled(btn)) {
+        log('Save Changes tidak aktif (sudah tersimpan) ✔');
         return true;
       }
+      simulateClick(btn);
+      log(`Tombol "${btn.textContent?.trim()}" diklik ✔`);
+      await iWait(1500);
+      return true;
     }
     return true;
   }
@@ -963,9 +989,116 @@
     }
   }
 
-  // Audio Thumbnail Uploader via Configuration Page
+  // Wait until a file input exists on the configure page (SPA renders it late)
+  function queryThumbFileInput() {
+    return document.querySelector('input[type="file"]') ||
+           document.querySelector('[class*="uploadButton"] input') ||
+           document.querySelector('input[accept*="image"]');
+  }
+
+  async function findThumbFileInput() {
+    const start = Date.now();
+    while (Date.now() - start < 8000) {
+      const inp = queryThumbFileInput();
+      if (inp) return inp;
+      await iWait(300);
+    }
+    // Fallback: some UIs only mount the input after clicking an Upload button
+    const uploadBtns = Array.from(document.querySelectorAll('button')).filter(b => {
+      const txt = (b.textContent?.trim() || '').toLowerCase();
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      // Tombol bernama "Upload" (belum ada thumbnail) atau "Change" (sudah ada thumbnail)
+      return txt === 'upload' || txt === 'change' || aria.includes('upload') || aria.includes('change image');
+    });
+    for (const btn of uploadBtns) {
+      simulateClick(btn);
+      await iWait(800);
+      const inp = queryThumbFileInput();
+      if (inp) return inp;
+    }
+    const nm = document.querySelector('textarea#name, input#name');
+    log(`🔎 Diagnostik: input[file]=${document.querySelectorAll('input[type="file"]').length}, nama=${nm ? '"' + nm.value.slice(0, 30) + '"' : 'TIDAK ADA'}, tombol=${document.querySelectorAll('button').length}, judul="${(document.title || '').slice(0, 40)}", path=${location.pathname}`);
+    return null;
+  }
+
+  // One upload attempt. Returns true ONLY if Save Changes was enabled, clicked, and finished.
+  async function attemptThumbnailUpload(file, soundId) {
+    // Tandai notifikasi (snackbar) yang SUDAH ada sebagai "basi", supaya notifikasi sukses
+    // dari lagu sebelumnya tidak dianggap sebagai tanda upload lagu ini selesai.
+    document.querySelectorAll('.MuiSnackbar-root').forEach(el => el.setAttribute('data-rbx-stale', '1'));
+
+    const fileInput = await findThumbFileInput();
+    if (!fileInput) {
+      log(`⚠️ Elemen upload file tidak ditemukan (ID: ${soundId})`);
+      return false;
+    }
+
+    log(`Menyematkan file thumbnail: ${file.name} (${Math.round(file.size / 1024)} KB)...`);
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    fileInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    fileInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+
+    // Wait for the page to accept the file → Save Changes becomes enabled
+    let saveBtn = null;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 12000) {
+      const b = getSaveButton();
+      if (b && !isButtonDisabled(b)) { saveBtn = b; break; }
+      await iWait(300);
+    }
+    if (!saveBtn) {
+      log(`⚠️ Save Changes tidak aktif setelah memilih file (ID: ${soundId})`);
+      return false;
+    }
+
+    await iWait(600);
+    simulateClick(saveBtn);
+    log(`Menyimpan thumbnail (ID: ${soundId})...`);
+
+    // Tunggu notifikasi "Changes saved successfully." — tombol Save ikut disabled saat
+    // proses upload masih berjalan, jadi tombol TIDAK boleh dipakai sebagai tanda selesai.
+    let saved = false;
+    const t1 = Date.now();
+    while (Date.now() - t1 < 40000) {
+      checkAbort();
+      // Hanya hitung notifikasi BARU (bukan yang sudah ditandai basi sebelum klik Save)
+      const okMsg = document.querySelector('.MuiSnackbar-root:not([data-rbx-stale]) [data-testid="update-success-message"]');
+      if (okMsg) {
+        saved = true;
+        break;
+      }
+      const snack = document.querySelector('.MuiSnackbar-root:not([data-rbx-stale]) .MuiSnackbarContent-root');
+      const snackText = (snack?.textContent || '').trim();
+      if (snackText && /fail|error|unable|could not|try again|too large|invalid/i.test(snackText)) {
+        log(`⚠️ Roblox menolak thumbnail: "${snackText.slice(0, 80)}" (ID: ${soundId})`);
+        return false;
+      }
+      await iWait(400);
+    }
+    if (!saved) {
+      // Cadangan: kalau Roblox memakai ulang elemen notifikasi lama, terima hasil
+      // bila pesan sukses ada dan tombol Save sudah nonaktif setelah 40 detik.
+      const anyOk = document.querySelector('[data-testid="update-success-message"]');
+      const b = getSaveButton();
+      if (anyOk && (!b || isButtonDisabled(b))) {
+        log(`ℹ️ Notifikasi memakai elemen lama, dianggap sukses setelah 40 detik (ID: ${soundId})`);
+        saved = true;
+      } else {
+        log(`⚠️ Notifikasi sukses tidak muncul dalam 40 detik (ID: ${soundId})`);
+        return false;
+      }
+    }
+
+    // Beri jeda singkat sebelum pindah halaman
+    await iWait(1500);
+    return true;
+  }
+
+  // Audio Thumbnail Uploader via Configuration Page (3 attempts, verified)
   async function uploadAudioThumbnail(soundId, thumbDataUrl, thumbName) {
-    log(`── [THUMBNAIL UPLOAD (ID: ${soundId})] ──`);
+    log(`── [THUMBNAIL UPLOAD v10.12 (ID: ${soundId})] ──`);
     if (!thumbDataUrl) {
       log(`⚠️ Data thumbnail tidak ditemukan`);
       return false;
@@ -977,50 +1110,25 @@
       return false;
     }
 
-    await iWait(1200);
-
-    // Look for file input in DOM
-    let fileInput = document.querySelector('input[type="file"]');
-
-    if (!fileInput) {
-      const uploadBtns = Array.from(document.querySelectorAll('button')).filter(b => {
-        const txt = (b.textContent?.trim() || '').toLowerCase();
-        return txt === 'upload' || txt.includes('upload');
-      });
-
-      for (const btn of uploadBtns) {
-        simulateClick(btn);
-        await iWait(600);
-        fileInput = document.querySelector('input[type="file"]');
-        if (fileInput) break;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      checkAbort();
+      await waitIfPaused();
+      try {
+        const ok = await attemptThumbnailUpload(file, soundId);
+        if (ok) {
+          log(`✔ Thumbnail berhasil diperbarui (ID: ${soundId})`);
+          return true;
+        }
+      } catch (err) {
+        if (isAbort(err)) throw err;
+        log(`Error upload thumbnail (ID: ${soundId}): ${err.message}`);
+      }
+      if (attempt < 3) {
+        log(`🔄 Upload thumbnail percobaan ${attempt}/3 gagal, coba lagi...`);
+        await iWait(2000);
       }
     }
-
-    if (!fileInput) {
-      log(`⚠️ Elemen upload file tidak ditemukan pada form konfigurasi`);
-      return false;
-    }
-
-    try {
-      log(`Menyematkan file thumbnail: ${file.name} (${Math.round(file.size / 1024)} KB)...`);
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      fileInput.files = dt.files;
-
-      fileInput.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-      fileInput.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-
-      await iWait(1500);
-
-      log(`Menyimpan perubahan thumbnail...`);
-      await clickSaveChanges();
-      await iWait(1500);
-      log(`✔ Thumbnail berhasil diperbarui (ID: ${soundId})`);
-      return true;
-    } catch (err) {
-      log(`Error upload thumbnail (ID: ${soundId}): ${err.message}`);
-      return false;
-    }
+    return false;
   }
 
   // Collaborators Tab Logic
@@ -1177,19 +1285,58 @@
     });
   }
 
-  async function processExperiences(universeId) {
+  // Membaca status baris universe di tabel dialog "Add Experiences".
+  //   'already' = tombol "Already added" (sudah pernah ditambahkan, tidak ada notifikasi saat Done)
+  //   'new'     = tombol "Remove" (baru diusulkan, perlu Done + Save)
+  //   null      = status tidak terbaca
+  async function detectExperienceRowState(universeId, timeout = 8000) {
+    const idStr = String(universeId);
+    const readState = (rows) => {
+      const texts = [];
+      for (const row of rows) {
+        for (const b of row.querySelectorAll('button')) {
+          texts.push((b.textContent || '').trim().toLowerCase());
+        }
+      }
+      if (texts.some(t => t.includes('remove'))) return 'new';
+      if (texts.some(t => t.includes('already added'))) return 'already';
+      return null;
+    };
+
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      checkAbort();
+      const rows = Array.from(document.querySelectorAll('[data-testid="experiences-table"] tr'));
+      // Utamakan baris yang memuat ID universe yang kita masukkan
+      const matched = rows.filter(r => (r.textContent || '').includes(idStr));
+      const s1 = readState(matched);
+      if (s1) return s1;
+      // Cadangan: bila ID tidak tampil di baris, baca seluruh tabel
+      if (matched.length === 0) {
+        const s2 = readState(rows);
+        if (s2) return s2;
+      }
+      await iWait(300);
+    }
+    return null;
+  }
+
+  // Satu percobaan menambah Universe ID. Return true HANYA jika notifikasi sukses terverifikasi.
+  async function processExperiencesOnce(universeId) {
     if (!universeId) {
       log("Universe ID kosong, dilewati");
-      return;
+      return true;
     }
     log("── [EXPERIENCES] ──");
+    // Tandai notifikasi lama sebagai "basi" agar tidak dihitung sebagai hasil percobaan ini
+    document.querySelectorAll('.MuiSnackbar-root').forEach(el => el.setAttribute('data-rbx-stale', '1'));
     await switchToExperiencesTab();
     await iWait(800);
 
     // NOTE: We do NOT check alreadyExistsExperience() here.
     // Roblox hides added experiences from the UI, so we always attempt to add.
     const opened = await openExperiencesDialog();
-    if (!opened) { log("Gagal membuka dialog Experiences"); return; }
+    if (!opened) { log("Gagal membuka dialog Experiences"); return false; }
 
     // Wait for dialog to appear
     await waitForElement('[role="dialog"], [data-testid*="modal"]', 10000);
@@ -1206,7 +1353,7 @@
     if (!input) {
       input = document.querySelector('[role="dialog"] input:not([type="hidden"]), [data-testid*="modal"] input:not([type="hidden"])');
     }
-    if (!input) { log("⚠️ Input experience tidak ditemukan"); return; }
+    if (!input) { log("⚠️ Input experience tidak ditemukan"); return false; }
     log(`Input ditemukan: placeholder="${input.placeholder}"`);
 
     // Fill the input
@@ -1248,13 +1395,93 @@
     }
     await iWait(1000);
 
+    // Cek status baris universe di tabel dialog:
+    //  - "Already added" → sudah pernah ditambahkan; tidak ada yang perlu disimpan
+    //    dan TIDAK ada notifikasi → langsung SKIP.
+    //  - "Remove"        → baru diusulkan → lanjut Done + Save + verifikasi notifikasi.
+    const rowState = await detectExperienceRowState(universeId, 8000);
+    if (rowState === 'already') {
+      log(`⚡ SKIP: Universe ${universeId} sudah ditambahkan sebelumnya (Already added) ✔`);
+      closeModalDialog('Done');
+      await iWait(800);
+      await waitDialogClose();
+      await iWait(400);
+      return true;
+    }
+    if (rowState === 'new') {
+      log(`Universe ${universeId} baru (tombol Remove) — lanjut simpan...`);
+    } else {
+      log(`⚠️ Status baris universe tidak terbaca, lanjut simpan & verifikasi notifikasi`);
+    }
+
     closeModalDialog('Done');
     await iWait(800);
     await waitDialogClose();
     await iWait(600);
     await clickSaveChanges();
-    await iWait(800);
-    log("Experiences selesai ✔");
+
+    // Verifikasi lewat notifikasi "Changes Saved — Permission given to N Experience"
+    const res = await waitPermissionAlert(20000);
+    if (res.ok === true) {
+      // Angka di notifikasi (mis. "1 Experience") hanya jumlah universe yang ditambahkan, tidak dipakai untuk verifikasi
+      log(`Experiences selesai ✔ — notifikasi: "${res.text.replace(/\s+/g, ' ').slice(0, 80)}"`);
+      return true;
+    }
+    if (res.ok === false) {
+      log(`⚠️ Notifikasi ERROR saat menambah Experience: "${res.text.replace(/\s+/g, ' ').slice(0, 80)}"`);
+      return false;
+    }
+    log("⚠️ Notifikasi sukses Experiences tidak muncul dalam 20 detik");
+    return false;
+  }
+
+  // Menunggu notifikasi (MUI Alert) hasil simpan di halaman Permissions.
+  // Hanya membaca notifikasi BARU (yang belum ditandai data-rbx-stale).
+  async function waitPermissionAlert(timeout = 20000) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      checkAbort();
+      const alerts = document.querySelectorAll('.MuiSnackbar-root:not([data-rbx-stale]) .MuiAlert-root');
+      for (const a of alerts) {
+        const txt = (a.textContent || '').trim();
+        const cls = typeof a.className === 'string' ? a.className : '';
+        if (cls.includes('MuiAlert-colorError') || /fail|error|unable|could not|try again|invalid/i.test(txt)) {
+          return { ok: false, text: txt };
+        }
+        if (/changes saved|permission given/i.test(txt)) {
+          return { ok: true, text: txt };
+        }
+      }
+      await iWait(300);
+    }
+    return { ok: null, text: '' };
+  }
+
+  // Menambah Universe ID dengan verifikasi notifikasi, diulang sampai 3 kali.
+  async function processExperiences(universeId) {
+    if (!universeId) {
+      log("Universe ID kosong, dilewati");
+      return true;
+    }
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      checkAbort();
+      await waitIfPaused();
+      const ok = await processExperiencesOnce(universeId);
+      if (ok) return true;
+      if (attempt < 3) {
+        log(`🔄 Experiences belum terverifikasi, ulangi (${attempt}/3)...`);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await iWait(2000);
+      }
+    }
+    const m = window.location.href.match(/store\/(\d+)\//);
+    const curId = m ? m[1] : 'unknown';
+    log(`❌ Experiences GAGAL terverifikasi (ID: ${curId})`);
+    const fd = await new Promise(resolve => chrome.storage.local.get(['rbx_exp_failed'], resolve));
+    const list = fd.rbx_exp_failed || [];
+    if (!list.includes(curId)) list.push(curId);
+    await chrome.storage.local.set({ rbx_exp_failed: list });
+    return false;
   }
 
   async function processOneAsset(mode, settings) {
@@ -1272,6 +1499,33 @@
     }
   }
 
+  // Error/404 handling with exponential-ish backoff (helps with Roblox rate limiting)
+  const MAX_PAGE_RETRY = 5;
+
+  async function handlePageErrorRetry(id, allData, index, ids, targetPage, data, label) {
+    const retryKey = `rbx_retry_${id}`;
+    const retryData = await new Promise(resolve => chrome.storage.local.get([retryKey, 'rbx_404_ids'], resolve));
+    const retryCount = retryData[retryKey] || 0;
+
+    if (retryCount < MAX_PAGE_RETRY) {
+      const delay = 3000 * (retryCount + 1);
+      await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
+      log(`🔄 [${label}] Percobaan ${retryCount + 1}/${MAX_PAGE_RETRY} — Membuka ulang ID: ${id} dalam ${delay / 1000} detik...`);
+      await iWait(delay);
+      navigateTo(`https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`);
+    } else {
+      await chrome.storage.local.set({ [retryKey]: 0 });
+      const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
+      log(`🚧 [${label}] SKIP permanen setelah ${MAX_PAGE_RETRY}x retry: "${songName404}" (ID: ${id})`);
+      const skippedList = retryData.rbx_404_ids || [];
+      if (!skippedList.includes(id)) {
+        skippedList.push(id);
+        await chrome.storage.local.set({ rbx_404_ids: skippedList });
+      }
+      await goToNextTrack(index, ids);
+    }
+  }
+
   // Main Asset Loop Controller
   async function processAssetsLoop() {
     if (_isProcessing) return;
@@ -1282,7 +1536,8 @@
         chrome.storage.local.get(
           [
             'rbx_auto_active', 'rbx_paused', 'rbx_needs_rescan', 'rbx_ids', 'rbx_audio_data', 'rbx_moderated_data',
-            'rbx_mode', 'rbx_index', 'usernames', 'universeId', 'rbx_thumb_data', 'rbx_thumb_name', 'rbx_include_thumb'
+            'rbx_mode', 'rbx_index', 'usernames', 'universeId', 'rbx_thumb_data', 'rbx_thumb_name', 'rbx_include_thumb',
+            'rbx_404_ids', 'rbx_thumb_failed'
           ],
           resolve
         )
@@ -1349,27 +1604,7 @@
       if (currentId !== id) {
         // Before navigating, check if we're currently on a 404 page
         if (is404Page()) {
-          const retryKey = `rbx_retry_${id}`;
-          const retryData = await new Promise(resolve => chrome.storage.local.get([retryKey], resolve));
-          const retryCount = retryData[retryKey] || 0;
-          const MAX_RETRY = 3;
-
-          if (retryCount < MAX_RETRY) {
-            await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
-            log(`🔄 [404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Membuka ulang halaman ID: ${id} dalam 3 detik...`);
-            await iWait(3000);
-            navigateTo(`https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`);
-          } else {
-            await chrome.storage.local.set({ [retryKey]: 0 });
-            const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
-            log(`🚧 [404] SKIP permanen setelah ${MAX_RETRY}x retry: "${songName404}" (ID: ${id})`);
-            const skippedList = data.rbx_404_ids || [];
-            if (!skippedList.includes(id)) {
-              skippedList.push(id);
-              await chrome.storage.local.set({ rbx_404_ids: skippedList });
-            }
-            await goToNextTrack(index, ids);
-          }
+          await handlePageErrorRetry(id, allData, index, ids, targetPage, data, '404');
           return;
         }
         log(`[${index + 1}/${ids.length}] Navigasi ke ID: ${id} (${targetPage})`);
@@ -1389,33 +1624,23 @@
       }
 
       if (isErrorOr404Page()) {
-        const retryKey = `rbx_retry_${id}`;
-        const retryData = await new Promise(resolve => chrome.storage.local.get([retryKey], resolve));
-        const retryCount = retryData[retryKey] || 0;
-        const MAX_RETRY = 3;
-
-        if (retryCount < MAX_RETRY) {
-          await chrome.storage.local.set({ [retryKey]: retryCount + 1 });
-          log(`🔄 [Error/404] Percobaan ${retryCount + 1}/${MAX_RETRY} — Reload halaman ID: ${id} dalam 3 detik...`);
-          await iWait(3000);
-          navigateTo(`https://create.roblox.com/dashboard/creations/store/${id}/${targetPage}`);
-        } else {
-          await chrome.storage.local.set({ [retryKey]: 0 });
-          const songName404 = allData[index]?.soundTitle || allData[index]?.title || id;
-          log(`🚧 [Error/404] SKIP permanen setelah ${MAX_RETRY}x retry: "${songName404}" (ID: ${id})`);
-          const skippedList = data.rbx_404_ids || [];
-          if (!skippedList.includes(id)) {
-            skippedList.push(id);
-            await chrome.storage.local.set({ rbx_404_ids: skippedList });
-          }
-          await goToNextTrack(index, ids);
-        }
+        await handlePageErrorRetry(id, allData, index, ids, targetPage, data, 'Error/404');
         return;
       }
 
       if (pageType === 'configure') {
-        await iWait(600);
+        // Wait until the configure form is actually rendered (SPA loads late)
+        // Tunggu sampai form benar-benar termuat: kolom Name terisi DAN input file ada
+        const formStart = Date.now();
+        while (Date.now() - formStart < 20000) {
+          checkAbort();
+          const nameEl = document.querySelector('textarea#name, input#name');
+          if (nameEl && nameEl.value && queryThumbFileInput()) break;
+          await iWait(300);
+        }
+        await iWait(800);
         checkAbort();
+
         const modInfo = getAudioModerationInfo();
         if (modInfo.isModerated) {
           const modLevel = modInfo.isRenameNeeded ? 'LOW' : 'FATAL';
@@ -1437,8 +1662,28 @@
         const songName = allData[index]?.soundTitle || allData[index]?.title || id;
         updateHUDInfo(songName, id, index + 1, ids.length, mode);
 
+        let thumbOk = true;
         if (data.rbx_thumb_data) {
-          await uploadAudioThumbnail(id, data.rbx_thumb_data, data.rbx_thumb_name);
+          thumbOk = await uploadAudioThumbnail(id, data.rbx_thumb_data, data.rbx_thumb_name);
+        }
+
+        if (!thumbOk) {
+          // Reload the page and retry the whole upload up to 2 more times before giving up
+          const tKey = `rbx_thumbretry_${id}`;
+          const tData = await new Promise(resolve => chrome.storage.local.get([tKey, 'rbx_thumb_failed'], resolve));
+          const tCount = tData[tKey] || 0;
+          if (tCount < 2) {
+            await chrome.storage.local.set({ [tKey]: tCount + 1 });
+            log(`🔄 Thumbnail gagal — muat ulang halaman & ulangi (${tCount + 1}/2) untuk ID: ${id}`);
+            await iWait(3000);
+            navigateTo(`https://create.roblox.com/dashboard/creations/store/${id}/configure`);
+            return;
+          }
+          await chrome.storage.local.set({ [tKey]: 0 });
+          const failedList = tData.rbx_thumb_failed || [];
+          if (!failedList.includes(id)) failedList.push(id);
+          await chrome.storage.local.set({ rbx_thumb_failed: failedList });
+          log(`❌ Thumbnail GAGAL permanen: "${songName}" (ID: ${id})`);
         }
 
         if (mode === 'thumbnail') {
@@ -1562,6 +1807,7 @@
         rbx_ids: [],
         rbx_audio_data: [],
         rbx_moderated_data: [],
+        rbx_thumb_failed: [],
         rbx_logs: []
       });
       log("🔄 State di-reset via HUD");
@@ -1705,7 +1951,7 @@
       syncHUDState({ rbx_auto_active: _state.active, rbx_paused: _state.paused });
       sendResponse({ status: 'paused', paused: _state.paused });
     }
-    return true;
+    return false;
   });
 
   setTimeout(() => {

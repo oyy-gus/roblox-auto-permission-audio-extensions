@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Roblox Auto Permission - Pro Tool",
-  "version": "10.1.0",
-  "version_name": "10.1.0 | https://github.com/oyy-gus/roblox-auto-permission-audio-extensions",
+  "version": "10.8.0",
+  "version_name": "10.8.0 | https://github.com/oyy-gus/roblox-auto-permission-audio-extensions",
   "description": "Otomatisasi izin Audio Collaborators & Experiences di Roblox Creator Dashboard!",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "activeTab"
   ],
   "host_permissions": [
