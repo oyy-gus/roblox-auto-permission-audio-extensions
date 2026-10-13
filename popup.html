@@ -54,39 +54,68 @@
     </div>
 
     <div class="form-group">
-      <label for="inputUniverseId">Universe ID</label>
-      <input type="text" id="inputUniverseId" placeholder="Contoh: 1234567890">
-      <div class="help-text">Universe ID yang akan ditambahkan ke Experiences</div>
+      <label for="inputUniverseId">Universe IDs (Pisahkan dengan koma atau baris baru)</label>
+      <textarea id="inputUniverseId" placeholder="Contoh: 1234567890, 9876543210"></textarea>
+      <div class="help-text">Satu atau lebih Universe ID yang akan ditambahkan ke Experiences</div>
     </div>
 
     <div class="form-group">
       <label>Thumbnail Audio (Opsional)</label>
-      <div class="thumbnail-picker-container">
-        <div id="thumbPreviewBox" class="thumb-preview-box">
-          <svg id="thumbDefaultIcon" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77zm-2.5 9.77l-4.5-4.5H3v6h4l4.5 4.5v-6z"/>
-          </svg>
-          <img id="thumbImgPreview" src="" alt="Thumbnail" class="thumb-img-preview" style="display: none;">
-        </div>
-        <div class="thumb-info-wrap">
-          <input type="file" id="inputThumbnailFile" accept="image/png, image/jpeg, image/jpg, image/bmp, image/webp" style="display: none;">
-          <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
-            <button type="button" id="btnSelectThumb" class="btn btn-secondary" style="padding: 5px 9px; font-size: 10.5px;">
-              📁 Pilih Gambar
-            </button>
-            <button type="button" id="btnClearThumb" class="btn btn-danger" style="display: none; padding: 5px 8px; font-size: 10px;">
-              ✕ Hapus
-            </button>
+
+      <!-- Drop zone: drag-drop + click to pick -->
+      <div id="thumbDropZone" class="thumb-drop-zone">
+        <!-- Hidden file inputs -->
+        <input type="file" id="inputThumbnailFile"
+               accept="image/png,image/jpeg,image/jpg,image/bmp,image/webp"
+               style="display:none;">
+        <!-- Camera capture for mobile -->
+        <input type="file" id="inputThumbnailCamera"
+               accept="image/*" capture="environment"
+               style="display:none;">
+
+        <div id="thumbDropContent" class="thumb-drop-content">
+          <div id="thumbPreviewBox" class="thumb-preview-box">
+            <svg id="thumbDefaultIcon" width="32" height="32" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-1.1 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+            </svg>
+            <img id="thumbImgPreview" src="" alt="Thumbnail" class="thumb-img-preview" style="display:none;">
           </div>
-          <button type="button" id="btnOpenTab" class="btn btn-neutral" style="padding: 5px 9px; font-size: 10px; margin-top: 4px;">
-            🗗 Buka di Tab (jika gagal pilih gambar)
-          </button>
-          <div id="thumbFileName" class="help-text" style="word-break: break-all; margin-top: 4px;">Belum ada gambar dipilih</div>
+          <div class="thumb-drop-hint">
+            <span id="thumbDropText">Seret gambar ke sini atau pilih metode di bawah</span>
+          </div>
         </div>
       </div>
-      <div class="checkbox-group" style="margin-top: 8px; display: flex; align-items: center; gap: 7px;">
-        <input type="checkbox" id="checkIncludeThumbnail" style="width: auto; cursor: pointer; accent-color: #ffffff;">
-        <label for="checkIncludeThumbnail" style="font-size: 10.5px; margin-bottom: 0; cursor: pointer; color: var(--text-secondary);">
+
+      <!-- Action buttons -->
+      <div class="thumb-action-row">
+        <button type="button" id="btnSelectThumb" class="btn btn-secondary thumb-action-btn">
+          📁 File
+        </button>
+        <button type="button" id="btnCameraThumb" class="btn btn-secondary thumb-action-btn">
+          📷 Kamera
+        </button>
+        <button type="button" id="btnPasteThumb" class="btn btn-secondary thumb-action-btn">
+          📋 Paste
+        </button>
+        <button type="button" id="btnOpenTab" class="btn btn-neutral thumb-action-btn">
+          🗗 Tab
+        </button>
+        <button type="button" id="btnClearThumb" class="btn btn-danger thumb-action-btn" style="display:none;">
+          ✕ Hapus
+        </button>
+      </div>
+
+      <!-- URL input fallback -->
+      <div class="thumb-url-row">
+        <input type="url" id="inputThumbUrl" placeholder="Atau tempel URL gambar (https://...)" autocomplete="off">
+        <button type="button" id="btnLoadThumbUrl" class="btn btn-secondary" style="padding:4px 8px;font-size:10px;">Load</button>
+      </div>
+
+      <div id="thumbFileName" class="help-text" style="word-break:break-all;margin-top:4px;">Belum ada gambar dipilih</div>
+
+      <div class="checkbox-group" style="margin-top:8px;display:flex;align-items:center;gap:7px;">
+        <input type="checkbox" id="checkIncludeThumbnail" style="width:auto;cursor:pointer;accent-color:#ffffff;">
+        <label for="checkIncludeThumbnail" style="font-size:10.5px;margin-bottom:0;cursor:pointer;color:var(--text-secondary);">
           Sertakan Thumbnail saat Start Both / Username / Universe
         </label>
       </div>
@@ -109,6 +138,9 @@
     </button>
     <button id="btnScan" class="btn btn-scan">
       🔍 Scan Only (Filter Moderated)
+    </button>
+    <button id="btnCleanName" class="btn btn-clean" style="grid-column: span 2;">
+      ✨ Auto Clean Name (Hapus Tag/Nomor/Tahun)
     </button>
     <button id="btnArchiveModerated" class="btn btn-warning" style="grid-column: span 2;">
       📦 Auto Archive Moderated Audio

@@ -406,6 +406,31 @@ textarea {
   color: #bbf7d0;
 }
 
+.btn-scan {
+  background: rgba(24, 24, 27, 0.9);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #a78bfa;
+}
+.btn-scan:hover {
+  background: rgba(139, 92, 246, 0.12);
+  border-color: rgba(139, 92, 246, 0.5);
+  color: #c4b5fd;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.15);
+}
+
+.btn-clean {
+  background: rgba(6, 182, 212, 0.08);
+  border-color: rgba(6, 182, 212, 0.35);
+  color: #67e8f9;
+  font-weight: 600;
+}
+.btn-clean:hover {
+  background: rgba(6, 182, 212, 0.18);
+  border-color: #06b6d4;
+  color: #a5f3fc;
+  box-shadow: 0 4px 14px rgba(6, 182, 212, 0.2);
+}
+
 /* Progress Tracker */
 .progress-card {
   margin-bottom: 12px;
@@ -548,5 +573,142 @@ textarea {
   
   .btn-primary {
     padding: 10px;
+  }
+}
+
+/* ── Thumbnail Upload ─────────────────────────────────────────────────── */
+
+/* Drop Zone */
+.thumb-drop-zone {
+  position: relative;
+  border: 2px dashed rgba(255,255,255,0.2);
+  border-radius: var(--radius-md);
+  background: rgba(255,255,255,0.03);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  min-height: 100px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+.thumb-drop-zone:hover {
+  border-color: rgba(255,255,255,0.45);
+  background: rgba(255,255,255,0.06);
+}
+.thumb-drop-zone.drag-over {
+  border-color: #ffffff;
+  background: rgba(255,255,255,0.1);
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.18), inset 0 0 20px rgba(255,255,255,0.05);
+}
+.thumb-drop-zone.has-image {
+  border-style: solid;
+  border-color: rgba(134,239,172,0.5);
+  background: rgba(134,239,172,0.04);
+}
+
+/* Drop content (icon + hint text) */
+.thumb-drop-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 16px;
+  width: 100%;
+}
+
+/* Preview box inside drop zone */
+.thumb-preview-box {
+  width: 60px;
+  height: 60px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.05);
+  flex-shrink: 0;
+  color: rgba(255,255,255,0.3);
+  transition: width 0.2s, height 0.2s;
+}
+.thumb-drop-zone.has-image .thumb-preview-box {
+  width: 90px;
+  height: 90px;
+}
+.thumb-img-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+/* Hint text inside drop zone */
+.thumb-drop-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.4;
+  max-width: 200px;
+}
+.thumb-drop-zone.has-image .thumb-drop-hint {
+  color: #86efac;
+}
+
+/* Action buttons row */
+.thumb-action-row {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.thumb-action-btn {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 6px !important;
+  font-size: 10px !important;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* URL input row */
+.thumb-url-row {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.thumb-url-row input[type="url"] {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 10px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  transition: border-color 0.2s;
+  outline: none;
+}
+.thumb-url-row input[type="url"]::placeholder {
+  color: var(--text-muted);
+}
+.thumb-url-row input[type="url"]:focus {
+  border-color: rgba(255,255,255,0.4);
+}
+
+/* Mobile-specific tweaks */
+@media (max-width: 480px) {
+  .thumb-drop-zone {
+    min-height: 80px;
+  }
+  .thumb-action-row {
+    gap: 4px;
+  }
+  .thumb-action-btn {
+    font-size: 9.5px !important;
+    padding: 5px 4px !important;
   }
 }

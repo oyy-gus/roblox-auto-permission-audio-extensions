@@ -1257,9 +1257,24 @@
     closeModalDialog('Done');
     await waitDialogClose();
     await iWait(500);
-    await clickSaveChanges();
-    await iWait(800);
-    log(`Collaborators selesai (${addedCount} ditambahkan) ✔`);
+
+    if (addedCount > 0) {
+      // Tandai notifikasi lama sebagai basi sebelum klik Save
+      document.querySelectorAll('.MuiSnackbar-root').forEach(el => el.setAttribute('data-rbx-stale', '1'));
+      await clickSaveChanges();
+      const res = await waitPermissionAlert(20000);
+      if (res.ok === true) {
+        log(`✔ Collaborators berhasil disimpan (${addedCount} ditambahkan)`);
+      } else if (res.ok === false) {
+        log(`⚠️ Notifikasi error Collaborators: "${res.text.slice(0, 80)}"`);
+      } else {
+        log(`ℹ️ Collaborators selesai (${addedCount} ditambahkan) ✔`);
+      }
+    } else {
+      await clickSaveChanges();
+      await iWait(800);
+      log(`Collaborators selesai (${addedCount} ditambahkan) ✔`);
+    }
     return true;
   }
 
@@ -1457,45 +1472,326 @@
     return { ok: null, text: '' };
   }
 
-  // Menambah Universe ID dengan verifikasi notifikasi, diulang sampai 3 kali.
-  async function processExperiences(universeId) {
-    if (!universeId) {
+  // Menambah satu atau lebih Universe ID, diulang sampai 3 kali per ID.
+  async function processExperiences(universeIdOrIds) {
+    // Normalisasi: selalu jadikan array
+    const universeIds = Array.isArray(universeIdOrIds)
+      ? universeIdOrIds.filter(Boolean)
+      : (universeIdOrIds ? [String(universeIdOrIds).trim()].filter(Boolean) : []);
+
+    if (universeIds.length === 0) {
       log("Universe ID kosong, dilewati");
       return true;
     }
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      checkAbort();
-      await waitIfPaused();
-      const ok = await processExperiencesOnce(universeId);
-      if (ok) return true;
-      if (attempt < 3) {
-        log(`🔄 Experiences belum terverifikasi, ulangi (${attempt}/3)...`);
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-        await iWait(2000);
+
+    let allOk = true;
+    for (const universeId of universeIds) {
+      log(`── [EXPERIENCES] Proses Universe ID: ${universeId} ──`);
+      let ok = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        checkAbort();
+        await waitIfPaused();
+        // Mark old snackbars as stale before each attempt
+        document.querySelectorAll('.MuiSnackbar-root').forEach(el => el.setAttribute('data-rbx-stale', '1'));
+        ok = await processExperiencesOnce(universeId);
+        if (ok) break;
+        if (attempt < 3) {
+          log(`🔄 Experiences Universe ${universeId} belum terverifikasi, ulangi (${attempt}/3)...`);
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          await iWait(2000);
+        }
+      }
+      if (!ok) {
+        const m = window.location.href.match(/store\/(\d+)\//);
+        const curId = m ? m[1] : 'unknown';
+        log(`❌ Experiences GAGAL terverifikasi untuk Universe ${universeId} (Audio ID: ${curId})`);
+        const fd = await new Promise(resolve => chrome.storage.local.get(['rbx_exp_failed'], resolve));
+        const list = fd.rbx_exp_failed || [];
+        if (!list.includes(curId)) list.push(curId);
+        await chrome.storage.local.set({ rbx_exp_failed: list });
+        allOk = false;
       }
     }
-    const m = window.location.href.match(/store\/(\d+)\//);
-    const curId = m ? m[1] : 'unknown';
-    log(`❌ Experiences GAGAL terverifikasi (ID: ${curId})`);
-    const fd = await new Promise(resolve => chrome.storage.local.get(['rbx_exp_failed'], resolve));
-    const list = fd.rbx_exp_failed || [];
-    if (!list.includes(curId)) list.push(curId);
-    await chrome.storage.local.set({ rbx_exp_failed: list });
-    return false;
+    return allOk;
+  }
+
+  // ── Clean Name: comprehensive regex engine v2 ───────────────────────────
+  function cleanAudioName(rawName) {
+    if (!rawName) return rawName;
+    let name = rawName;
+
+    // 1. Remove leading track / index numbering e.g. '01 - ', '01. ', 'Track 01 - ', '#01 '
+    name = name.replace(/^\s*(?:track\s*|disc\s*|cd\s*|no\.?\s*|side\s*[ab]\s*|vol(?:ume)?\.?\s*\d+\s*|#)?\s*\d{1,3}\s*[-–_.:|\s]\s*/i, '');
+
+    // 2. Remove URLs & domains
+    name = name.replace(/https?:\/\/\S+/gi, '');
+    name = name.replace(/(?:www\.|bit\.ly|youtu\.be|tinyurl\.com|linktr\.ee|tiktok\.com)\S*/gi, '');
+
+    // 3. Remove hashtags and @mentions
+    name = name.replace(/#[a-z0-9_]+/gi, '');
+    name = name.replace(/@[a-z0-9_]+/gi, '');
+
+    // 4. Bracketed content tags - remove entire bracket if it contains any known media/promo tag
+    const bracketKeywords = [
+      // Video / Audio labels
+      'official', 'officiel', 'oficial', 'video', 'audio', 'music\\s*video', 'mv', 'm\\/v',
+      'visualizer', 'clip', 'videoclip', 'lyric\\s*(?:video|clip)?', 'lyrics?', 'lyrical',
+      'performance', 'live\\s*(?:at|session|performance|version)?', 'concert', 'tour', 'unplugged', 'acoustic(?:\\s*version)?',
+      // Quality & formats
+      'hq', 'hd', '4k', '8k', '1080p', '720p', '480p', '360p', '60fps',
+      '320\\s*kbps', '256\\s*kbps', '192\\s*kbps', '128\\s*kbps', '64\\s*kbps',
+      'flac', 'wav', 'mp3', 'aac', 'ogg', 'opus', 'lossless', 'hi-?res',
+      // Version / editions
+      'full\\s*(?:album|version|song|track|length|audio)',
+      'extended\\s*(?:version|mix|cut)?', "director'?s?\\s*cut",
+      'radio\\s*(?:edit|version|mix)', 'album\\s*version', 'single\\s*version',
+      'original\\s*mix', 'club\\s*(?:mix|version)',
+      'remaster(?:ed)?(?:\\s*\\d{4})?', 're-?master(?:ed)?',
+      'deluxe\\s*(?:edition|version|track)?', 'special\\s*(?:edition|version)',
+      'anniversary\\s*(?:edition|version|remaster)?',
+      'bonus\\s*(?:track|edition)?', 'b-?side',
+      'explicit\\s*(?:version)?', 'clean\\s*(?:version)?', 'radio\\s*safe',
+      'censored', 'uncensored',
+      // Audio effects & modifications
+      'slowed(?:\\s*[+&]?\\s*(?:reverb|\\+\\s*reverb))?',
+      'reverb(?:\\s*[+&]?\\s*slowed)?', 'lo-?fi',
+      'speed(?:ed)?\\s*up|sped\\s*up', 'speed\\s*down',
+      'nightcore', 'daycore', 'pitched\\s*(?:up|down)',
+      'bass\\s*boost(?:ed)?', '8d\\s*audio', '3d\\s*audio', '360\\s*audio',
+      'spatial\\s*audio', 'surround\\s*sound', 'binaural',
+      'echo(?:\\s*effect)?', 'chorus(?:\\s*version)?',
+      // DJ / remix tags
+      'dj\\s*(?:remix|edit|mix|version|cut)', 'remix(?:ed)?', 'bootleg', 'mashup', 'flip',
+      'vip\\s*(?:mix)?', 'festival\\s*(?:mix|edit)', 'extended\\s*dub', 'dub\\s*mix',
+      'instrumental\\s*(?:version|mix)?', 'acapella|a\\s*cappella', 'karaoke(?:\\s*version)?',
+      'cover', 'remake', 'session', 'demo', 'rough\\s*(?:mix|cut)',
+      // Featured / Producer in brackets
+      'feat(?:uring)?\\.?\\s+[^\\(\\[\\]\\)]+', 'ft\\.?\\s+[^\\(\\[\\]\\)]+', 'prod(?:uced)?\\.?\\s*by\\s+[^\\(\\[\\]\\)]+',
+      // Social / Viral / FYP
+      'viral(?:l+)?', 'trend(?:ing)?', 'fyp(?:シ|age)?', 'for\\s*you\\s*(?:page)?',
+      'tiktok(?:\\s*viral)?', 'tiktok\\s*(?:song|sound|hit|trend)',
+      'reels?', 'shorts?', 'youtube\\s*shorts?', 'instagram\\s*reels?', 'ig\\s*reels?',
+      'xyzbca', 'xyzb', 'sound\\s*viral', 'sound\\s*kane', 'jedag\\s*jedug', 'jj\\s*kane', 'mengkane',
+      // Indonesian promo / tags
+      'terbaru(?:\\s*\\d{4})?', 'terpopuler', 'terhits?', 'terkeren', 'terbaik',
+      'nostalgia', 'hits?\\s*(?:lama|lawas|jadul)', 'lagu\\s*lawas', 'lagu\\s*jadul',
+      // Streaming & copyright
+      'spotify', 'apple\\s*music', 'itunes?', 'deezer', 'tidal', 'soundcloud', 'youtube\\s*music', 'ytmusic',
+      'out\\s*now', 'available\\s*now', 'stream\\s*now', 'pre-?save', 'exclusive', 'premiere',
+      'copyright\\s*free', 'royalty\\s*free', 'no\\s*copyright', 'free\\s*(?:download|use|to\\s*use)', 'ncs(?:\\s*release)?'
+    ];
+
+    const bracketPattern = new RegExp(
+      '[\\[\\(][^\\]\\)]*?(?:' + bracketKeywords.join('|') + ')[^\\]\\)]*?[\\]\\)]',
+      'gi'
+    );
+
+    let prev;
+    do {
+      prev = name;
+      name = name.replace(bracketPattern, ' ');
+    } while (name !== prev);
+
+    // 5. Featured artists outside brackets e.g. 'Artist feat. Someone', 'Artist ft. Someone'
+    name = name.replace(/\s+(?:ft\.?|feat\.?|featuring|with|w\/)\s+[^–\-|]+(?=$|[-–|])/gi, ' ');
+    name = name.replace(/\s+(?:prod(?:uced)?\.?\s*by)\s+[^–\-|]+(?=$|[-–|])/gi, ' ');
+
+    // 6. Platform / channel trailing suffixes
+    name = name.replace(/\s*[-–|]\s*(?:topic|vevo|official\s*(?:channel|page|account|audio|video)?|auto[-\s]?generated|provided\s*to\s*youtube|youtube|ytmusic|tidal|spotify|soundcloud)\s*$/gi, '');
+
+    // 7. Trailing & leading viral/promo phrases (e.g. 'Viral TikTok', 'FYP 2024', etc.)
+    const viralPhrases = [
+      'sound\\s*(?:viral|tiktok|fyp|kane|horeg|seram)',
+      'preset\\s*(?:xml|alight\\s*motion|am)',
+      'jedag\\s*jedug(?:\\s*kane|\\s*full\\s*bass)?',
+      'jj\\s*(?:kane|tipis|berjalan|slow|full\\s*bass)',
+      'full\\s*bass(?:\\s*glerr)?',
+      'full\\s*album',
+      'mengkane|kane\\s*parah|kane\\s*bgt',
+      'viral(?:l+)?\\s*tiktok(?:\\s*fyp)?',
+      'tiktok\\s*viral(?:l+)?',
+      'trend(?:ing)?\\s*tiktok',
+      'tiktok\\s*trend(?:ing)?',
+      'fyp(?:シ|age)?\\s*tiktok',
+      'tiktok', 'reels?', 'shorts', 'youtube\\s*shorts?', 'xyzbca',
+      'terbaru\\s*\\d{4}',
+      'viral(?:l+)?\\s*\\d{4}',
+      'trend(?:ing)?\\s*\\d{4}',
+      'viral(?:l+)?', 'fyp(?:シ|age)?', 'trend(?:ing)?',
+      'terbaru', 'terpopuler', 'terbaik', 'terhits?'
+    ];
+
+    let prevV;
+    do {
+      prevV = name;
+      for (const vp of viralPhrases) {
+        name = name.replace(new RegExp('(?:\\s*[-–|,]\\s*|\\s+)' + vp + '(?=\\s*[-–|,]\\s*|\\s*$)', 'gi'), ' ');
+        name = name.replace(new RegExp('^\\s*' + vp + '(?:\\s*[-–|,]\\s*|\\s+)', 'gi'), ' ');
+      }
+      name = name.replace(/\s{2,}/g, ' ').trim();
+    } while (name !== prevV);
+
+    // 8. Trailing promo phrases
+    name = name.replace(/\s*[-–|,:]\s*(?:out\s*now|available\s*now|listen\s*now|stream\s*now|pre-?save|new\s*single|new\s*release)\s*$/gi, '');
+
+    // 9. Source labels in brackets (e.g. [Sony Music], (Atlantic Records))
+    name = name.replace(/\s*[\(\[].*?(?:records?|music|entertainment|label|publishing|group|studios?|dist\.).*?[\)\]]\s*$/gi, '');
+
+    // 10. Parenthetical pure numbers or codes
+    name = name.replace(/\s*[\[\(]\s*\d{3,}\s*[\]\)]/g, '');
+    name = name.replace(/\s*[\[\(]\s*[a-z]{2,4}\d{3,}\s*[\]\)]/gi, '');
+
+    // 11. Bare year at the end
+    name = name.replace(/\s*[-–~]?\s*\b(?:19|20)\d{2}\b\s*$/g, '');
+
+    // 12. Normalize separators and whitespace
+    name = name.replace(/\s*[-–_|]+\s*$/g, '');
+    name = name.replace(/^\s*[-–_|]+\s*/g, '');
+    name = name.replace(/\(\s*\)/g, '');
+    name = name.replace(/\[\s*\]/g, '');
+    name = name.replace(/\s{2,}/g, ' ').trim();
+    name = name.replace(/^[\s\-–_|.,;:!?/]+|[\s\-–_|.,;:!?/]+$/g, '').trim();
+
+    // Fallback: return original if result is empty or too short
+    if (!name || name.length < 2) return rawName;
+    return name;
+  }
+
+
+  // ── Process Clean Name on configure page ────────────────────────────────
+  async function processCleanName(soundId) {
+    log(`── [CLEAN NAME] ID: ${soundId} ──`);
+
+    // Wait for the name textarea to appear
+    const nameEl = await waitForElement('textarea#name, textarea[name="name"]', 15000);
+    if (!nameEl) {
+      log(`⚠️ Field nama tidak ditemukan (ID: ${soundId})`);
+      return false;
+    }
+
+    await iWait(500);
+    const originalName = nameEl.value || '';
+    if (!originalName) {
+      log(`⚠️ Nama kosong, dilewati (ID: ${soundId})`);
+      return false;
+    }
+
+    const cleaned = cleanAudioName(originalName);
+    if (cleaned === originalName) {
+      log(`⚡ SKIP: Nama sudah bersih — "${originalName}"`);
+      return true;
+    }
+
+    // Check moderation — don't rename moderated titles (##### pattern)
+    if (originalName.includes('#####')) {
+      log(`⚠️ SKIP: Nama ter-moderasi (###), tidak diubah — ID: ${soundId}`);
+      return false;
+    }
+
+    log(`✏️ Ganti: "${originalName}" → "${cleaned}"`);
+
+    // Enforce 50-char limit (Roblox maxlength)
+    const finalName = cleaned.slice(0, 50);
+
+    // Tandai notifikasi (snackbar) yang SUDAH ada sebagai "basi", supaya notifikasi sukses
+    // dari lagu/proses sebelumnya tidak dianggap sebagai tanda selesai lagu ini.
+    document.querySelectorAll('.MuiSnackbar-root').forEach(el => el.setAttribute('data-rbx-stale', '1'));
+
+    const filled = await fillInput(nameEl, finalName);
+    if (!filled) {
+      log(`⚠️ Gagal mengisi nama (ID: ${soundId})`);
+      return false;
+    }
+    await iWait(500);
+
+    // Tunggu tombol Save Changes menjadi aktif
+    let saveBtn = null;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 12000) {
+      const b = getSaveButton();
+      if (b && !isButtonDisabled(b)) { saveBtn = b; break; }
+      await iWait(300);
+    }
+    if (!saveBtn) {
+      const b = getSaveButton();
+      if (b && isButtonDisabled(b)) {
+        log(`ℹ️ Save Changes tidak aktif (sudah tersimpan atau nilai sama) — ID: ${soundId}`);
+        return true;
+      }
+      log(`⚠️ Save Changes tidak aktif setelah mengisi nama (ID: ${soundId})`);
+      return false;
+    }
+
+    await iWait(600);
+    simulateClick(saveBtn);
+    log(`Menyimpan perubahan nama (ID: ${soundId})...`);
+
+    // Tunggu notifikasi "Changes saved successfully." — persis seperti di fitur upload thumbnail
+    let saved = false;
+    const t1 = Date.now();
+    while (Date.now() - t1 < 40000) {
+      checkAbort();
+      // Hanya hitung notifikasi BARU (bukan yang sudah ditandai basi sebelum klik Save)
+      const okMsg = document.querySelector('.MuiSnackbar-root:not([data-rbx-stale]) [data-testid="update-success-message"]');
+      if (okMsg) {
+        saved = true;
+        break;
+      }
+      const snack = document.querySelector('.MuiSnackbar-root:not([data-rbx-stale]) .MuiSnackbarContent-root, .MuiSnackbar-root:not([data-rbx-stale]) .MuiAlert-root');
+      const snackText = (snack?.textContent || '').trim();
+      if (snackText && /changes saved|saved successfully|berhasil/i.test(snackText)) {
+        saved = true;
+        break;
+      }
+      if (snackText && /fail|error|unable|could not|try again|too large|invalid/i.test(snackText)) {
+        log(`⚠️ Roblox menolak perubahan nama: "${snackText.slice(0, 80)}" (ID: ${soundId})`);
+        return false;
+      }
+      await iWait(400);
+    }
+
+    if (!saved) {
+      // Cadangan: kalau Roblox memakai ulang elemen notifikasi lama, terima hasil
+      // bila pesan sukses ada dan tombol Save sudah nonaktif setelah 40 detik.
+      const anyOk = document.querySelector('[data-testid="update-success-message"]');
+      const b = getSaveButton();
+      if (anyOk && (!b || isButtonDisabled(b))) {
+        log(`ℹ️ Notifikasi memakai elemen lama, dianggap sukses setelah 40 detik (ID: ${soundId})`);
+        saved = true;
+      } else if (b && isButtonDisabled(b)) {
+        log(`✔ Tombol Save nonaktif (perubahan nama tersimpan) — ID: ${soundId}`);
+        saved = true;
+      } else {
+        log(`⚠️ Notifikasi sukses tidak muncul dalam 40 detik (ID: ${soundId})`);
+        return false;
+      }
+    }
+
+    log(`✔ Nama berhasil disimpan: "${finalName}" (ID: ${soundId})`);
+    // Beri jeda singkat sebelum navigasi berikutnya
+    await iWait(1500);
+    return true;
   }
 
   async function processOneAsset(mode, settings) {
     const usernames = settings.usernames || [];
-    const universeId = settings.universeId || "";
+    // Support both array (new) and string (legacy) for universeId
+    const rawUniverseId = settings.universeId;
+    const universeIds = Array.isArray(rawUniverseId)
+      ? rawUniverseId.filter(Boolean)
+      : (rawUniverseId ? [String(rawUniverseId).trim()].filter(Boolean) : []);
 
     if (mode === "username") {
       await processCollaborators(usernames);
     } else if (mode === "universe") {
-      await processExperiences(universeId);
+      await processExperiences(universeIds);
+    } else if (mode === "clean_name") {
+      // handled directly in processAssetsLoop via configure page
     } else {
+      // 'both': add all usernames AND all universe IDs
       await processCollaborators(usernames);
       await iWait(600);
-      await processExperiences(universeId);
+      await processExperiences(universeIds);
     }
   }
 
@@ -1565,6 +1861,31 @@
         } else {
           navigateTo('https://create.roblox.com/dashboard/creations?activeTab=Audio');
         }
+        return;
+      }
+
+      if (mode === 'clean_name') {
+        if (needsRescan || ids.length === 0) {
+          if (window.location.href.includes('/creations')) {
+            await scanAllPages(mode);
+          } else {
+            navigateTo('https://create.roblox.com/dashboard/creations?activeTab=Audio');
+          }
+          return;
+        }
+        // On configure page — clean the name
+        if (window.location.href.includes('/configure')) {
+          const storeMatchClean = window.location.href.match(/store\/(\d+)\/configure/);
+          const curIdClean = storeMatchClean ? storeMatchClean[1] : null;
+          if (curIdClean === ids[index]) {
+            await processCleanName(ids[index]);
+            checkAbort();
+            await goToNextTrack(index, ids);
+            return;
+          }
+        }
+        // Navigate to configure page
+        navigateTo(`https://create.roblox.com/dashboard/creations/store/${ids[index]}/configure`);
         return;
       }
 
@@ -1775,7 +2096,11 @@
 
     document.body.appendChild(hudElement);
 
+    // Default: start minimized
+    hudElement.classList.add('minimized');
+
     const hudMinBtn = document.getElementById('hudMinBtn');
+    hudMinBtn.textContent = '+';
     hudMinBtn.addEventListener('click', () => {
       hudElement.classList.toggle('minimized');
       hudMinBtn.textContent = hudElement.classList.contains('minimized') ? '+' : '—';

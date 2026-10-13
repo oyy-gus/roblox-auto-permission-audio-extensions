@@ -16,20 +16,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnUsername = document.getElementById('btnUsername');
   const btnUniverse = document.getElementById('btnUniverse');
   const btnScan = document.getElementById('btnScan');
+  const btnCleanName = document.getElementById('btnCleanName');
   const btnArchiveModerated = document.getElementById('btnArchiveModerated');
   const btnStop = document.getElementById('btnStop');
   const btnPause = document.getElementById('btnPause');
   const btnReset = document.getElementById('btnReset');
 
-  // Thumbnail Elements
-  const inputThumbnailFile = document.getElementById('inputThumbnailFile');
-  const btnSelectThumb = document.getElementById('btnSelectThumb');
-  const btnClearThumb = document.getElementById('btnClearThumb');
-  const btnOpenTab = document.getElementById('btnOpenTab');
-  const thumbDefaultIcon = document.getElementById('thumbDefaultIcon');
-  const thumbImgPreview = document.getElementById('thumbImgPreview');
-  const thumbFileName = document.getElementById('thumbFileName');
+  // ── Thumbnail Elements ──────────────────────────────────────────────────
+  const inputThumbnailFile   = document.getElementById('inputThumbnailFile');
+  const inputThumbnailCamera = document.getElementById('inputThumbnailCamera');
+  const thumbDropZone        = document.getElementById('thumbDropZone');
+  const btnSelectThumb       = document.getElementById('btnSelectThumb');
+  const btnCameraThumb       = document.getElementById('btnCameraThumb');
+  const btnPasteThumb        = document.getElementById('btnPasteThumb');
+  const btnClearThumb        = document.getElementById('btnClearThumb');
+  const btnOpenTab           = document.getElementById('btnOpenTab');
+  const thumbDefaultIcon     = document.getElementById('thumbDefaultIcon');
+  const thumbImgPreview      = document.getElementById('thumbImgPreview');
+  const thumbFileName        = document.getElementById('thumbFileName');
+  const thumbDropText        = document.getElementById('thumbDropText');
   const checkIncludeThumbnail = document.getElementById('checkIncludeThumbnail');
+  const inputThumbUrl        = document.getElementById('inputThumbUrl');
+  const btnLoadThumbUrl      = document.getElementById('btnLoadThumbUrl');
 
   let currentThumbData = null;
   let currentThumbName = null;
@@ -47,76 +55,278 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let activeJsonTab = 'clean'; // 'clean' | 'moderated' | 'fatal' | 'low'
 
-  const MAX_THUMB_BYTES = 2 * 1024 * 1024; // 2MB
+  const MAX_THUMB_BYTES = 4 * 1024 * 1024; // 4 MB hard cap (compress if >2MB)
+  const TARGET_BYTES    = 2 * 1024 * 1024; // target after compression
 
+  // ── Preview helper ──────────────────────────────────────────────────────
   function setThumbnailPreview(dataUrl, name) {
     if (dataUrl) {
       thumbImgPreview.src = dataUrl;
       thumbImgPreview.style.display = 'block';
-      thumbDefaultIcon.style.display = 'none';
-      thumbFileName.textContent = name || 'Gambar dipilih';
-      thumbFileName.style.color = '#e4e4e7';
-      btnClearThumb.style.display = 'inline-flex';
+      if (thumbDefaultIcon) thumbDefaultIcon.style.display = 'none';
+      if (thumbDropText) thumbDropText.textContent = name || 'Gambar dipilih ✔';
+      if (thumbFileName) {
+        const kb = Math.round(dataUrl.length * 0.75 / 1024);
+        thumbFileName.textContent = `${name || 'Gambar dipilih'} (≈${kb} KB)`;
+        thumbFileName.style.color = '#86efac';
+      }
+      if (btnClearThumb) btnClearThumb.style.display = 'inline-flex';
+      if (thumbDropZone) thumbDropZone.classList.add('has-image');
     } else {
       thumbImgPreview.src = '';
       thumbImgPreview.style.display = 'none';
-      thumbDefaultIcon.style.display = 'block';
-      thumbFileName.textContent = 'Belum ada gambar dipilih';
-      thumbFileName.style.color = 'var(--text-muted)';
-      btnClearThumb.style.display = 'none';
+      if (thumbDefaultIcon) thumbDefaultIcon.style.display = 'block';
+      if (thumbDropText) thumbDropText.textContent = 'Seret gambar ke sini atau pilih metode di bawah';
+      if (thumbFileName) {
+        thumbFileName.textContent = 'Belum ada gambar dipilih';
+        thumbFileName.style.color = 'var(--text-muted)';
+      }
+      if (btnClearThumb) btnClearThumb.style.display = 'none';
+      if (thumbDropZone) thumbDropZone.classList.remove('has-image');
     }
   }
 
-  // Buka popup sebagai tab biasa (pemilih file di HP tidak menutup halaman)
-  if (btnOpenTab) {
-    btnOpenTab.addEventListener('click', () => {
-      chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+  // ── Compression helper (canvas resize) ─────────────────────────────────
+  // Returns a Promise<string|null> of a dataURL (JPEG, quality reduced until <targetBytes)
+  function compressImage(dataUrl, targetBytes, maxDim = 1024) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        // Downscale if any dimension exceeds maxDim
+        if (w > maxDim || h > maxDim) {
+          const ratio = Math.min(maxDim / w, maxDim / h);
+          w = Math.round(w * ratio);
+          h = Math.round(h * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        // Try progressively lower quality
+        let quality = 0.88;
+        let result = canvas.toDataURL('image/jpeg', quality);
+        while (result.length * 0.75 > targetBytes && quality > 0.3) {
+          quality -= 0.08;
+          result = canvas.toDataURL('image/jpeg', quality);
+        }
+        resolve(result);
+      };
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
     });
   }
 
-  if (btnSelectThumb) {
-    btnSelectThumb.addEventListener('click', () => {
+  // ── Core: process any image File or Blob ─────────────────────────────────
+  async function processImageFile(file, nameHint) {
+    if (!file) return;
+    const allowedTypes = ['image/png','image/jpeg','image/jpg','image/bmp','image/webp','image/gif'];
+    if (!allowedTypes.includes(file.type.toLowerCase()) && !file.type.startsWith('image/')) {
+      alert('Format file tidak didukung. Gunakan PNG, JPG, WEBP, atau BMP.');
+      return;
+    }
+    if (file.size > MAX_THUMB_BYTES) {
+      alert(`Ukuran gambar terlalu besar (${Math.round(file.size/1024/1024*10)/10} MB). Maksimal 4 MB.`);
+      return;
+    }
+    if (thumbFileName) {
+      thumbFileName.textContent = 'Memproses gambar...';
+      thumbFileName.style.color = '#fbbf24';
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      let dataUrl = event.target.result;
+      const name = nameHint || file.name || 'thumbnail';
+
+      // Auto-compress if over 2MB
+      if (dataUrl.length * 0.75 > TARGET_BYTES) {
+        if (thumbFileName) thumbFileName.textContent = 'Mengompresi gambar...';
+        const compressed = await compressImage(dataUrl, TARGET_BYTES);
+        if (compressed) dataUrl = compressed;
+      }
+
+      currentThumbData = dataUrl;
+      currentThumbName = name;
+      setThumbnailPreview(dataUrl, name);
+
+      chrome.storage.local.set({ rbx_thumb_data: dataUrl, rbx_thumb_name: name }, () => {
+        if (chrome.runtime.lastError) {
+          alert('Gagal menyimpan gambar: ' + chrome.runtime.lastError.message);
+        }
+      });
+    };
+    reader.onerror = () => alert('Gagal membaca file gambar.');
+    reader.readAsDataURL(file);
+  }
+
+  // ── Process image from a URL (fetch as blob) ────────────────────────────
+  async function loadFromUrl(url) {
+    if (!url || !url.startsWith('http')) { alert('URL tidak valid.'); return; }
+    if (thumbFileName) {
+      thumbFileName.textContent = 'Mengunduh dari URL...';
+      thumbFileName.style.color = '#fbbf24';
+    }
+    try {
+      const res = await fetch(url, { mode: 'cors' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      if (!blob.type.startsWith('image/')) throw new Error('Bukan file gambar');
+      const name = url.split('/').pop().split('?')[0] || 'thumb_url.jpg';
+      await processImageFile(blob, name);
+    } catch (e) {
+      alert('Gagal memuat gambar dari URL: ' + e.message + '\n\nCoba download manual lalu pilih file.');
+      if (thumbFileName) {
+        thumbFileName.textContent = 'Gagal memuat dari URL';
+        thumbFileName.style.color = '#f87171';
+      }
+    }
+  }
+
+  // ── Drag & Drop ──────────────────────────────────────────────────────────
+  if (thumbDropZone) {
+    ['dragenter','dragover'].forEach(evt => {
+      thumbDropZone.addEventListener(evt, (e) => {
+        e.preventDefault(); e.stopPropagation();
+        thumbDropZone.classList.add('drag-over');
+      });
+    });
+    ['dragleave','dragend'].forEach(evt => {
+      thumbDropZone.addEventListener(evt, (e) => {
+        thumbDropZone.classList.remove('drag-over');
+      });
+    });
+    thumbDropZone.addEventListener('drop', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      thumbDropZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) { await processImageFile(file, file.name); return; }
+      // Handle dropped image URL
+      const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+      if (url && url.startsWith('http')) await loadFromUrl(url);
+    });
+    // Click on drop zone = open file picker
+    thumbDropZone.addEventListener('click', (e) => {
+      if (e.target.closest('button') || e.target.closest('input')) return;
       inputThumbnailFile.click();
     });
   }
 
+  // ── File button ──────────────────────────────────────────────────────────
+  if (btnSelectThumb) {
+    btnSelectThumb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      inputThumbnailFile.click();
+    });
+  }
   if (inputThumbnailFile) {
-    inputThumbnailFile.addEventListener('change', (e) => {
+    inputThumbnailFile.addEventListener('change', async (e) => {
       const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      if (file.size > MAX_THUMB_BYTES) {
-        alert("Ukuran gambar terlalu besar! Maksimal 2MB.");
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        currentThumbData = event.target.result;
-        currentThumbName = file.name;
-        setThumbnailPreview(currentThumbData, currentThumbName);
-        chrome.storage.local.set({
-          rbx_thumb_data: currentThumbData,
-          rbx_thumb_name: currentThumbName
-        }, () => {
-          if (chrome.runtime.lastError) {
-            alert("Gagal menyimpan gambar: " + chrome.runtime.lastError.message);
-          }
-        });
-      };
-      reader.onerror = () => alert("Gagal membaca file gambar.");
-      reader.readAsDataURL(file);
+      if (file) await processImageFile(file, file.name);
+      e.target.value = ''; // allow re-picking same file
     });
   }
 
+  // ── Camera button (mobile) ───────────────────────────────────────────────
+  if (btnCameraThumb) {
+    btnCameraThumb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      inputThumbnailCamera.click();
+    });
+  }
+  if (inputThumbnailCamera) {
+    inputThumbnailCamera.addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) await processImageFile(file, file.name);
+      e.target.value = '';
+    });
+  }
+
+  // ── Paste button (and Ctrl+V global) ────────────────────────────────────
+  async function pasteFromClipboard() {
+    try {
+      // Modern Clipboard API (Chrome 98+)
+      if (navigator.clipboard && navigator.clipboard.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imageType = item.types.find(t => t.startsWith('image/'));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            await processImageFile(blob, 'clipboard_paste.png');
+            return;
+          }
+        }
+        alert('Clipboard tidak berisi gambar.\nSalin gambar terlebih dahulu (Ctrl+C pada gambar), lalu klik Paste.');
+      } else {
+        alert('Paste otomatis tidak didukung di browser ini.\nGunakan Ctrl+V saat halaman ini aktif, atau pilih file manual.');
+      }
+    } catch (e) {
+      alert('Gagal membaca clipboard: ' + e.message + '\n\nPastikan izin clipboard diizinkan, atau pilih file manual.');
+    }
+  }
+
+  if (btnPasteThumb) {
+    btnPasteThumb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pasteFromClipboard();
+    });
+  }
+
+  // Global Ctrl+V paste support (when focus not inside a text input)
+  document.addEventListener('paste', async (e) => {
+    const active = document.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) await processImageFile(file, 'paste.png');
+        return;
+      }
+    }
+  });
+
+  // ── Clear button ─────────────────────────────────────────────────────────
   if (btnClearThumb) {
-    btnClearThumb.addEventListener('click', () => {
+    btnClearThumb.addEventListener('click', (e) => {
+      e.stopPropagation();
       currentThumbData = null;
       currentThumbName = null;
       if (inputThumbnailFile) inputThumbnailFile.value = '';
+      if (inputThumbnailCamera) inputThumbnailCamera.value = '';
+      if (inputThumbUrl) inputThumbUrl.value = '';
       setThumbnailPreview(null, null);
       chrome.storage.local.remove(['rbx_thumb_data', 'rbx_thumb_name']);
     });
   }
 
+  // ── Open in Tab (HP fallback) ────────────────────────────────────────────
+  if (btnOpenTab) {
+    btnOpenTab.addEventListener('click', (e) => {
+      e.stopPropagation();
+      chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+    });
+  }
+
+  // ── URL load ─────────────────────────────────────────────────────────────
+  if (btnLoadThumbUrl) {
+    btnLoadThumbUrl.addEventListener('click', () => {
+      const url = inputThumbUrl ? inputThumbUrl.value.trim() : '';
+      loadFromUrl(url);
+    });
+  }
+  if (inputThumbUrl) {
+    inputThumbUrl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        loadFromUrl(inputThumbUrl.value.trim());
+      }
+    });
+  }
+
+  // ── Checkbox ─────────────────────────────────────────────────────────────
   if (checkIncludeThumbnail) {
     checkIncludeThumbnail.addEventListener('change', () => {
       chrome.storage.local.set({ rbx_include_thumb: checkIncludeThumbnail.checked });
@@ -132,10 +342,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     ],
     (data) => {
       if (data.usernames) {
-        inputUsernames.value = Array.isArray(data.usernames) ? data.usernames.join(', ') : data.usernames;
+        inputUsernames.value = Array.isArray(data.usernames) ? data.usernames.join('\n') : data.usernames;
       }
       if (data.universeId !== undefined) {
-        inputUniverseId.value = data.universeId;
+        inputUniverseId.value = Array.isArray(data.universeId) ? data.universeId.join('\n') : data.universeId;
       }
       if (data.rbx_thumb_data) {
         currentThumbData = data.rbx_thumb_data;
@@ -152,11 +362,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   function saveFormSettings() {
     const rawNames = inputUsernames.value;
     const names = rawNames.split(/[\n,]+/).map(n => n.trim()).filter(Boolean);
-    const universe = inputUniverseId.value.trim();
+    const rawUniverse = inputUniverseId.value;
+    const universeIds = rawUniverse.split(/[\n,]+/).map(u => u.trim()).filter(Boolean);
 
     chrome.storage.local.set({
       usernames: names,
-      universeId: universe,
+      universeId: universeIds,
       rbx_include_thumb: checkIncludeThumbnail ? checkIncludeThumbnail.checked : false
     });
   }
@@ -182,6 +393,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       statusText.textContent = mode === 'scan' ? 'SCANNING ALL PAGES' :
                                mode === 'archive_moderated' ? 'ARCHIVING MODERATED' :
                                mode === 'thumbnail' ? 'UPLOADING THUMBNAILS' :
+                               mode === 'clean_name' ? 'CLEANING NAMES' :
                                `RUNNING (${mode.toUpperCase()})`;
     } else {
       statusBadge.classList.remove('active');
@@ -240,15 +452,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const rawNames = inputUsernames.value;
     const names = rawNames.split(/[\n,]+/).map(n => n.trim()).filter(Boolean);
-    const universe = inputUniverseId.value.trim();
+    const rawUniverse = inputUniverseId.value;
+    const universeIds = rawUniverse.split(/[\n,]+/).map(u => u.trim()).filter(Boolean);
 
     if ((mode === 'both' || mode === 'username') && names.length === 0) {
       alert("Masukkan setidaknya 1 Username!");
       return;
     }
 
-    if ((mode === 'both' || mode === 'universe') && !universe) {
-      alert("Masukkan Universe ID!");
+    if ((mode === 'both' || mode === 'universe') && universeIds.length === 0) {
+      alert("Masukkan setidaknya 1 Universe ID!");
       return;
     }
 
@@ -299,6 +512,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnUsername.addEventListener('click', () => launchProcess('username'));
   btnUniverse.addEventListener('click', () => launchProcess('universe'));
   btnScan.addEventListener('click', () => launchProcess('scan'));
+  if (btnCleanName) btnCleanName.addEventListener('click', () => launchProcess('clean_name'));
   btnArchiveModerated.addEventListener('click', () => launchProcess('archive_moderated'));
 
   async function broadcastTabMessage(message) {
