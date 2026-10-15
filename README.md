@@ -1,82 +1,147 @@
-# Roblox Auto Permission - Extension (Manifest V3)
+<div align="center">
 
-Extension browser modern untuk Microsoft Edge & Google Chrome yang mengotomatisasi penambahan **Collaborators**, **Experiences**, **Scan & Archiving Audio Moderated** pada aset Audio di **Roblox Creator Dashboard** (`create.roblox.com`).
+# 🛡️ Roblox Auto Permission
+
+### Extension Browser · Manifest V3
+
+<p>
+  <img src="https://img.shields.io/badge/Browser-Chrome%20%7C%20Edge-2563EB?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Chrome and Edge">
+  <img src="https://img.shields.io/badge/Manifest-V3-7C3AED?style=for-the-badge" alt="Manifest V3">
+  <img src="https://img.shields.io/badge/Platform-Roblox%20Creator%20Dashboard-111827?style=for-the-badge&logo=roblox&logoColor=white" alt="Roblox Creator Dashboard">
+</p>
+
+**Otomatisasi pengelolaan izin, pemindaian moderasi, pengarsipan audio, dan unggah thumbnail di Roblox Creator Dashboard.**
+
+</div>
 
 ---
 
 > [!WARNING]
-> **PERINGATAN PENTING BAHASA ROBLOX:**
-> Bahasa akun Roblox / Creator Hub **WAJIB** disetel ke **English (Bahasa Inggris)**. Ekstensi ini bekerja dengan mendeteksi elemen DOM dan API Roblox (seperti `"Add collaborators"`, `"Save Changes"`, `"Archive"`, `"Done"`, dll.). Jika menggunakan bahasa lain (seperti Indonesia), beberapa fitur DOM **TIDAK AKAN BEKERJA**.
+> **⚠️ PERSYARATAN BAHASA AKUN**
+>
+> Bahasa akun Roblox / Creator Hub **wajib disetel ke English (Bahasa Inggris)**. Ekstensi mendeteksi elemen DOM dan teks antarmuka Roblox, seperti `Add collaborators`, `Save Changes`, `Archive`, dan `Done`.
+>
+> Jika Creator Hub menggunakan bahasa lain, termasuk Bahasa Indonesia, beberapa fitur otomatisasi mungkin **tidak berfungsi dengan benar**.
+>
+> **🔧 Kompatibilitas situs:** Ekstensi ini bergantung pada struktur halaman, elemen antarmuka, dan perilaku API Roblox Creator Dashboard. Jika Roblox mengubah desain, teks tombol, struktur DOM, alur halaman, atau API-nya, sebagian fitur atau seluruh ekstensi dapat berhenti berfungsi sewaktu-waktu. Jika itu terjadi, ekstensi mungkin perlu diperbarui agar kembali kompatibel.
+
+## ✨ Fitur Utama
+
+### ⏯️ Kontrol Proses
+
+- **Pause & Resume** — jeda proses kapan saja dan lanjutkan kembali tanpa kehilangan progres yang tersimpan.
+- **Progres dan log real-time** — pantau persentase progres serta aktivitas melalui konsol log.
+- **Penyimpanan progres lokal** — status dan log disimpan melalui `chrome.storage`.
+
+### 🔐 Pengelolaan Izin Otomatis
+
+- **Start Both** — menambahkan *Collaborators* berdasarkan username dan *Experiences* berdasarkan Universe ID.
+- **Start Username** — hanya memproses penambahan Collaborators.
+- **Start Universe** — hanya memproses penambahan Experiences.
+- **Navigasi dan pagination otomatis** — berpindah antarhalaman audio pada halaman `/store/{id}/permissions` atau `/store/{id}/configure`.
+- **Pemulihan halaman 404** — memuat ulang halaman permission audio yang mengalami 404 dan mencoba kembali secara otomatis.
+
+### 🎵 Pemindaian dan Moderasi Audio
+
+- **Scan Only** — memindai audio dan mengelompokkan hasil moderasi tanpa menambahkan izin.
+- **Archive Moderated** — mengarsip audio kategori **FATAL**.
+- **FATAL vs LOW**
+  - 🛑 **FATAL** — audio diblokir atau dihapus oleh sistem; ditandai untuk pengarsipan otomatis.
+  - ⚠️ **LOW** — judul audio dimoderasi, misalnya berubah menjadi `#####`; dicatat untuk ditinjau atau diganti namanya, bukan otomatis diarsipkan.
+- **Auto Archive dengan API + DOM Fallback** — mencoba endpoint Roblox `develop.roblox.com/v1/assets/{id}/archive`, lalu menggunakan interaksi DOM sebagai fallback jika jalur API tidak dapat digunakan.
+
+### 🖼️ Unggah Thumbnail Otomatis
+
+- Mengunggah thumbnail kustom ke banyak aset audio melalui halaman konfigurasi `/store/{id}/configure`.
+- Mendukung berkas `.png`, `.jpg`, `.bmp`, dan `.webp`.
+- Menyediakan pratinjau gambar langsung di popup sebelum proses dijalankan.
+
+### 📦 Ekspor Data
+
+- **Audio List JSON Exporter** — mengekspor hasil scan dalam format JSON.
+- Data dapat mencakup `title`, `sound_id`, `soundThumbnail`, dan `moderationLevel`.
+- Hasil dapat dilihat atau disalin melalui tombol **View JSON**.
 
 ---
 
-## 🌟 Fitur Utama
+## 🧭 Enam Mode Operasi
 
-- **Fitur Jeda & Lanjutkan (Pause & Resume)**: Menghentikan sementara proses kapan saja di tengah jalan tanpa kehilangan progres, dan dapat dilanjutkan kembali dengan 1 klik.
-- **Auto Archive via Roblox API + DOM Fallback**: Mengarsip audio yang ter-moderasi langsung menggunakan Roblox API (`develop.roblox.com/v1/assets/{id}/archive`), bypass semua kendala UI/hover/Radix portal. Jika API dibatasi, ekstensi otomatis beralih ke simulasi hover & click DOM.
-- **Tingkatan Moderasi (FATAL vs LOW)**:
-  - 🛑 **FATAL**: Audio diblokir/dihapus sistem -> Otomatis diarsip.
-  - ⚠️ **LOW**: Judul audio ter-moderasi (`#####`) -> Dicatat sebagai perlu ganti nama, tidak diarsip.
-- **Auto Upload Audio Thumbnail**: Mengunggah gambar thumbnail kustom untuk seluruh aset audio Anda secara massal melalui halaman konfigurasi Roblox (`/store/{id}/configure`). Mendukung format `.png`, `.jpg`, `.bmp`, `.webp` dengan preview instan di popup.
-- **Auto Reload 404 Pages**: Jika halaman permission audio mengembalikan error 404, ekstensi tidak membolos (*skip*), melainkan melakukan muat ulang (*reload*) halaman dan mengulanginya otomatis.
-- **Auto Navigation & Pagination**: Memindai seluruh daftar audio berhalaman (pagination), secara otomatis berpindah dari satu audio ke audio berikutnya (`/store/{id}/permissions` atau `/store/{id}/configure`).
-- **6 Mode Operasi**:
-  1. 🚀 **Start Both**: Menambahkan Collaborators (Username) dan Experiences (Universe ID).
-  2. 🖼️ **Auto Upload Thumbnail**: Mengunggah file thumbnail ke seluruh audio secara otomatis.
-  3. 👤 **Start Username**: Hanya menambahkan Collaborators.
-  4. 🎮 **Start Universe**: Hanya menambahkan Experiences.
-  5. 🔍 **Scan Only**: Memindai seluruh audio dan mengkategorikan moderasi tanpa memberikan izin.
-  6. 📦 **Archive Moderated**: Mengarsip semua audio ter-moderasi kategori FATAL.
-- **Real-Time Progress & Log Console**: Persentase progres dan log aktivitas real-time yang tersimpan otomatis di `chrome.storage`.
-- **Audio List JSON Exporter**: Menyimpan daftar lagu hasil scan lengkap dengan `title`, `sound_id`, `soundThumbnail`, dan `moderationLevel`, dapat disalin dengan 1 klik.
+| Mode | Fungsi |
+|---|---|
+| 🚀 **Start Both** | Menambahkan Collaborators dan Experiences |
+| 🖼️ **Auto Upload Thumbnail** | Mengunggah thumbnail ke aset audio secara massal |
+| 👤 **Start Username** | Hanya menambahkan Collaborators |
+| 🎮 **Start Universe** | Hanya menambahkan Experiences |
+| 🔍 **Scan Only** | Memindai dan mengelompokkan status moderasi tanpa mengubah izin |
+| 📦 **Archive Moderated** | Mengarsip audio kategori FATAL |
 
 ---
 
-## 📁 Struktur File Extension
+## 📁 Struktur File
 
-```
+```text
 auto-permission-audio-roblox-extensions/
-├── manifest.json       # Manifest V3 Configuration (Edge & Chrome)
-├── background.js       # Service Worker & Badge Indicator
-├── popup.html          # HTML Tampilan Popup Extension
-├── popup.css           # Styling Modern Dark Glassmorphism
-├── popup.js            # Logika Interaktif Popup & Storage Sync
-├── content.js          # Automation Script Injected ke Roblox
-├── content.css         # Styling Floating HUD di Halaman Roblox
-├── icons/              # Ikon Extension Auto Permissions (16px, 48px, 128px)
+├── manifest.json       # Konfigurasi Manifest V3 (Edge & Chrome)
+├── background.js       # Service Worker dan indikator badge
+├── popup.html          # Antarmuka popup extension
+├── popup.css           # Gaya popup dark glassmorphism
+├── popup.js            # Interaksi popup dan sinkronisasi storage
+├── content.js          # Skrip otomatisasi pada halaman Roblox
+├── content.css         # Gaya Floating HUD di halaman Roblox
+├── icons/
 │   ├── icon16.png
 │   ├── icon48.png
 │   └── icon128.png
-└── README.md           # Panduan Penggunaan
+└── README.md           # Dokumentasi proyek
 ```
 
 ---
 
-## 🛠️ Cara Install Extension di Microsoft Edge / Chrome
+## 🧰 Instalasi
 
-1. Buka **Microsoft Edge** (`edge://extensions`) atau **Google Chrome** (`chrome://extensions`).
-2. Aktifkan mode pengembang (**Developer mode**) di toggle samping/atas menu.
-3. Klik tombol **Load unpacked** (Muat tanpa kemasan).
-4. Pilih folder repositori ekstensi ini (`roblox-auto-permission-audio-extensions`).
-5. Extension **Roblox Auto Permission - Pro Tool** akan terpasang dan muncul di toolbar browser.
+1. Buka halaman pengelolaan extension:
+   - **Microsoft Edge:** `edge://extensions`
+   - **Google Chrome:** `chrome://extensions`
+2. Aktifkan **Developer mode**.
+3. Klik **Load unpacked** (*Muat tanpa kemasan*).
+4. Pilih folder proyek `roblox-auto-permission-audio-extensions`.
+5. Pastikan extension muncul di toolbar browser.
 
 ---
 
 ## 🚀 Cara Penggunaan
 
-1. Klik ikon extension di toolbar browser untuk membuka **Popup UI**.
-2. Masukkan **Usernames** (contoh: `GussJTM`) dan **Universe ID** (contoh: `12345678`).
-3. Pilih mode yang ingin dijalankan:
-   - Klik **🚀 Start Both** untuk memproses Collaborators + Experiences.
-   - Atau pilih **👤 Start Username**, **🎮 Start Universe**, **🔍 Scan Only**, atau **📦 Archive Moderated**.
-4. Extension akan membuka halaman `https://create.roblox.com/dashboard/creations?activeTab=Audio` secara otomatis, Pastikan anda sudah login terlebih dahulu.
-5. **Floating HUD** akan muncul di pojok kanan atas halaman Roblox untuk menampilkan aktivitas live.
-6. Untuk menjeda/melanjutkan, klik tombol **Pause / Resume** di Popup atau Floating HUD.
-7. Setelah selesai, klik tombol **View JSON** di Popup untuk melihat / menyalin daftar lagu hasil scan.
+1. Login ke [Roblox Creator Dashboard](https://create.roblox.com/dashboard/creations?activeTab=Audio) terlebih dahulu.
+2. Klik ikon extension di toolbar untuk membuka popup.
+3. Masukkan **Username** (contoh: `GussJTM`) dan/atau **Universe ID** (contoh: `12345678`) sesuai mode operasi.
+4. Pilih mode yang ingin dijalankan:
+   - **🚀 Start Both** untuk Collaborators dan Experiences.
+   - **👤 Start Username** untuk Collaborators saja.
+   - **🎮 Start Universe** untuk Experiences saja.
+   - **🔍 Scan Only** untuk pemindaian moderasi.
+   - **📦 Archive Moderated** untuk pengarsipan audio kategori FATAL.
+   - **🖼️ Auto Upload Thumbnail** untuk unggah thumbnail massal.
+5. Ikuti aktivitas melalui **Floating HUD** di pojok kanan atas halaman Roblox.
+6. Gunakan **Pause / Resume** pada popup atau Floating HUD untuk menjeda atau melanjutkan proses.
+7. Setelah pemindaian selesai, pilih **View JSON** untuk melihat atau menyalin hasilnya.
 
 ---
 
-## 🛡️ Catatan Keamanan & Rate Limit
+## 🛡️ Keamanan, Penyimpanan, dan Batas Permintaan
 
-- **Rate Limit Safe**: Ekstensi menggunakan jeda waktu (*delay*) sekuensial 1–2 detik antar proses sehingga aman dari blokir *Rate Limit* (`HTTP 429`) Roblox.
-- **Keamanan Data**: Seluruh konfigurasi dan hasil scan tersimpan secara lokal di browser Anda (`chrome.storage.local`).
+- **Penyimpanan lokal** — konfigurasi dan hasil scan disimpan di `chrome.storage.local` pada browser.
+- **Jeda antarproses** — ekstensi menggunakan jeda sekuensial sekitar 1–2 detik untuk membantu mengurangi permintaan beruntun.
+- **Rate limit** — jeda tersebut tidak menjamin bebas dari `HTTP 429`; ikuti batas dan ketentuan Roblox, dan hentikan proses jika terjadi pembatasan berulang.
+- **Periksa hasil** — tinjau hasil scan dan pastikan aset serta izin yang diproses sudah benar, khususnya sebelum pengarsipan massal.
+
+---
+
+<div align="center">
+
+![Chrome](https://img.shields.io/badge/Chrome-Supported-2563EB?style=flat-square&logo=googlechrome&logoColor=white)
+![Edge](https://img.shields.io/badge/Edge-Supported-0D9488?style=flat-square&logo=microsoftedge&logoColor=white)
+![Manifest V3](https://img.shields.io/badge/Manifest-V3-7C3AED?style=flat-square)
+
+<sub>Roblox Auto Permission · Dokumentasi extension</sub>
+
+</div>
